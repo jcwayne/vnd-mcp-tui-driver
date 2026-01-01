@@ -1,6 +1,7 @@
 //! Core TUI driver implementation
 
 use crate::error::{Result, TuiError};
+use crate::keys::Key;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -232,6 +233,34 @@ impl TuiDriver {
 
         let mut writer = self.master_writer.lock();
         writer.write_all(text.as_bytes())?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Send a single key to the terminal
+    pub fn press_key(&self, key: &Key) -> Result<()> {
+        if !self.is_running() {
+            return Err(TuiError::SessionClosed);
+        }
+
+        let bytes = key.to_escape_sequence();
+        let mut writer = self.master_writer.lock();
+        writer.write_all(&bytes)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Send multiple keys to the terminal
+    pub fn press_keys(&self, keys: &[Key]) -> Result<()> {
+        if !self.is_running() {
+            return Err(TuiError::SessionClosed);
+        }
+
+        let mut writer = self.master_writer.lock();
+        for key in keys {
+            let bytes = key.to_escape_sequence();
+            writer.write_all(&bytes)?;
+        }
         writer.flush()?;
         Ok(())
     }
