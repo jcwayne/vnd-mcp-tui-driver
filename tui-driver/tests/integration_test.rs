@@ -127,15 +127,20 @@ async fn test_key_parse() {
 
 #[tokio::test]
 async fn test_snapshot() {
-    let options = LaunchOptions::new("bash")
-        .args(vec!["--norc".to_string(), "--noprofile".to_string()]);
+    let options =
+        LaunchOptions::new("bash").args(vec!["--norc".to_string(), "--noprofile".to_string()]);
 
     let driver = TuiDriver::launch(options).await.expect("Failed to launch");
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Type something to appear in snapshot
-    driver.send_text("echo SNAPSHOT_TEST\n").expect("send failed");
-    driver.wait_for_text("SNAPSHOT_TEST", 2000).await.expect("wait failed");
+    driver
+        .send_text("echo SNAPSHOT_TEST\n")
+        .expect("send failed");
+    driver
+        .wait_for_text("SNAPSHOT_TEST", 2000)
+        .await
+        .expect("wait failed");
 
     let snapshot = driver.snapshot();
 

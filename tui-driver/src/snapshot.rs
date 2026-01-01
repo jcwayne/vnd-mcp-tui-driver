@@ -56,7 +56,13 @@ pub struct Span {
 
 impl Span {
     /// Creates a new span with required fields only.
-    pub fn new(ref_id: impl Into<String>, text: impl Into<String>, x: u16, y: u16, width: u16) -> Self {
+    pub fn new(
+        ref_id: impl Into<String>,
+        text: impl Into<String>,
+        x: u16,
+        y: u16,
+        width: u16,
+    ) -> Self {
         Self {
             ref_id: ref_id.into(),
             text: text.into(),
@@ -194,7 +200,10 @@ impl Snapshot {
     /// Returns a vector of references to spans whose text contains the
     /// given substring.
     pub fn get_by_text(&self, text: &str) -> Vec<&Span> {
-        self.spans.iter().filter(|s| s.text.contains(text)).collect()
+        self.spans
+            .iter()
+            .filter(|s| s.text.contains(text))
+            .collect()
     }
 
     /// Gets the first span containing the specified text.
@@ -639,12 +648,8 @@ mod tests {
     #[test]
     fn test_snapshot_from_rows() {
         let rows = vec![
-            Row::with_spans(0, vec![
-                Span::new("ref1", "Line1", 0, 0, 5),
-            ]),
-            Row::with_spans(1, vec![
-                Span::new("ref2", "Line2", 0, 1, 5),
-            ]),
+            Row::with_spans(0, vec![Span::new("ref1", "Line1", 0, 0, 5)]),
+            Row::with_spans(1, vec![Span::new("ref2", "Line2", 0, 1, 5)]),
         ];
 
         let snapshot = Snapshot::from_rows(rows);
@@ -654,12 +659,13 @@ mod tests {
 
     #[test]
     fn test_get_by_ref() {
-        let rows = vec![
-            Row::with_spans(0, vec![
+        let rows = vec![Row::with_spans(
+            0,
+            vec![
                 Span::new("ref1", "Hello", 0, 0, 5),
                 Span::new("ref2", "World", 5, 0, 5),
-            ]),
-        ];
+            ],
+        )];
 
         let snapshot = Snapshot::from_rows(rows);
 
@@ -673,12 +679,13 @@ mod tests {
 
     #[test]
     fn test_get_by_text() {
-        let rows = vec![
-            Row::with_spans(0, vec![
+        let rows = vec![Row::with_spans(
+            0,
+            vec![
                 Span::new("ref1", "Hello World", 0, 0, 11),
                 Span::new("ref2", "Goodbye World", 0, 1, 13),
-            ]),
-        ];
+            ],
+        )];
 
         let snapshot = Snapshot::from_rows(rows);
 
@@ -812,9 +819,18 @@ mod tests {
     #[test]
     fn test_color_to_string() {
         assert_eq!(color_to_string(vt100::Color::Default), None);
-        assert_eq!(color_to_string(vt100::Color::Idx(1)), Some("color1".to_string()));
-        assert_eq!(color_to_string(vt100::Color::Idx(255)), Some("color255".to_string()));
-        assert_eq!(color_to_string(vt100::Color::Rgb(255, 128, 0)), Some("#ff8000".to_string()));
+        assert_eq!(
+            color_to_string(vt100::Color::Idx(1)),
+            Some("color1".to_string())
+        );
+        assert_eq!(
+            color_to_string(vt100::Color::Idx(255)),
+            Some("color255".to_string())
+        );
+        assert_eq!(
+            color_to_string(vt100::Color::Rgb(255, 128, 0)),
+            Some("#ff8000".to_string())
+        );
     }
 
     #[test]
@@ -827,11 +843,10 @@ mod tests {
 
     #[test]
     fn test_generate_yaml_format() {
-        let rows = vec![
-            Row::with_spans(1, vec![
-                Span::new("s1", "Hello", 1, 1, 5).with_bold(true),
-            ]),
-        ];
+        let rows = vec![Row::with_spans(
+            1,
+            vec![Span::new("s1", "Hello", 1, 1, 5).with_bold(true)],
+        )];
 
         let yaml = generate_yaml(&rows);
 
