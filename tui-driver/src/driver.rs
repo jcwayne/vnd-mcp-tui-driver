@@ -2,6 +2,7 @@
 
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
+use crate::snapshot::{build_snapshot, Snapshot};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -223,6 +224,13 @@ impl TuiDriver {
         }
 
         result
+    }
+
+    /// Get accessibility-style snapshot of current screen
+    pub fn snapshot(&self) -> Snapshot {
+        let parser = self.parser.lock();
+        let screen = parser.screen();
+        build_snapshot(screen)
     }
 
     /// Send text to the terminal
