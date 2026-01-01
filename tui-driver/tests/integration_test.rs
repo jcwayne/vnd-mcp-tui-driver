@@ -94,7 +94,9 @@ async fn test_press_key() {
     driver.press_keys(&keys).expect("Failed to press keys");
 
     // Press Enter
-    driver.press_key(&Key::Enter).expect("Failed to press Enter");
+    driver
+        .press_key(&Key::Enter)
+        .expect("Failed to press Enter");
 
     // Wait for output
     let found = driver

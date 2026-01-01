@@ -130,7 +130,10 @@ impl Key {
         let s_trimmed = s.trim();
 
         // Check for modifier combinations first
-        if let Some(rest) = s_trimmed.strip_prefix("Ctrl+").or_else(|| s_trimmed.strip_prefix("ctrl+")) {
+        if let Some(rest) = s_trimmed
+            .strip_prefix("Ctrl+")
+            .or_else(|| s_trimmed.strip_prefix("ctrl+"))
+        {
             let chars: Vec<char> = rest.chars().collect();
             if chars.len() == 1 {
                 return Ok(Key::Ctrl(chars[0]));
@@ -142,7 +145,10 @@ impl Key {
             }
         }
 
-        if let Some(rest) = s_trimmed.strip_prefix("Alt+").or_else(|| s_trimmed.strip_prefix("alt+")) {
+        if let Some(rest) = s_trimmed
+            .strip_prefix("Alt+")
+            .or_else(|| s_trimmed.strip_prefix("alt+"))
+        {
             let chars: Vec<char> = rest.chars().collect();
             if chars.len() == 1 {
                 return Ok(Key::Alt(chars[0]));
