@@ -5,11 +5,21 @@ use crate::keys::Key;
 use crate::mouse::{mouse_click, mouse_double_click, MouseButton};
 use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Signals that can be sent to the process
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    Int,
+    Term,
+    Hup,
+    Kill,
+    Quit,
+}
 
 /// Configuration for launching a TUI session
 #[derive(Debug, Clone)]
@@ -60,6 +70,9 @@ pub struct TuiDriver {
     /// Session identifier
     session_id: String,
 
+    /// PTY master for resize operations
+    master: Mutex<Box<dyn MasterPty + Send>>,
+
     /// PTY master handle for writing
     master_writer: Mutex<Box<dyn Write + Send>>,
 
@@ -75,9 +88,10 @@ pub struct TuiDriver {
     /// Whether the session is still running
     running: Arc<AtomicBool>,
 
-    /// Terminal dimensions
-    cols: u16,
-    rows: u16,
+    /// Terminal columns (using atomics for resize)
+    cols: AtomicU16,
+    /// Terminal rows (using atomics for resize)
+    rows: AtomicU16,
 
     /// Handle to the background reader thread
     _reader_handle: Option<std::thread::JoinHandle<()>>,
@@ -173,13 +187,14 @@ impl TuiDriver {
 
         Ok(Self {
             session_id,
+            master: Mutex::new(pty_pair.master),
             master_writer: Mutex::new(master_writer),
             child: Mutex::new(child),
             parser,
             last_update,
             running,
-            cols: options.cols,
-            rows: options.rows,
+            cols: AtomicU16::new(options.cols),
+            rows: AtomicU16::new(options.rows),
             _reader_handle: Some(reader_thread),
         })
     }
@@ -196,7 +211,10 @@ impl TuiDriver {
 
     /// Get terminal dimensions
     pub fn size(&self) -> (u16, u16) {
-        (self.cols, self.rows)
+        (
+            self.cols.load(Ordering::SeqCst),
+            self.rows.load(Ordering::SeqCst),
+        )
     }
 
     /// Get plain text snapshot of current screen
@@ -331,12 +349,64 @@ impl TuiDriver {
         Ok(())
     }
 
+    /// Resize the terminal
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        if !self.is_running() {
+            return Err(TuiError::SessionClosed);
+        }
+
+        let master = self.master.lock();
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| TuiError::ResizeFailed(e.to_string()))?;
+
+        // Update stored dimensions
+        self.cols.store(cols, Ordering::SeqCst);
+        self.rows.store(rows, Ordering::SeqCst);
+
+        // Update parser dimensions
+        {
+            let mut parser = self.parser.lock();
+            parser.set_size(rows, cols);
+        }
+
+        Ok(())
+    }
+
+    /// Send a signal to the child process
+    pub fn send_signal(&self, signal: Signal) -> Result<()> {
+        if !self.is_running() {
+            return Err(TuiError::SessionClosed);
+        }
+
+        match signal {
+            Signal::Int => {
+                // Send Ctrl+C (0x03)
+                self.send_text("\x03")?;
+            }
+            Signal::Kill | Signal::Term | Signal::Hup | Signal::Quit => {
+                let mut child = self.child.lock();
+                child
+                    .kill()
+                    .map_err(|e| TuiError::SignalFailed(e.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Validate that coordinates are within terminal bounds.
     ///
     /// Coordinates must be 1-based and within the terminal dimensions.
     /// Returns an error if x=0, y=0, x>cols, or y>rows.
     fn validate_coordinates(&self, x: u16, y: u16) -> Result<()> {
-        if x == 0 || y == 0 || x > self.cols || y > self.rows {
+        let cols = self.cols.load(Ordering::SeqCst);
+        let rows = self.rows.load(Ordering::SeqCst);
+        if x == 0 || y == 0 || x > cols || y > rows {
             return Err(TuiError::InvalidCoordinates { x, y });
         }
         Ok(())

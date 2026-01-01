@@ -29,6 +29,12 @@ pub enum TuiError {
     #[error("PTY error: {0}")]
     PtyError(String),
 
+    #[error("Resize failed: {0}")]
+    ResizeFailed(String),
+
+    #[error("Failed to send signal: {0}")]
+    SignalFailed(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
