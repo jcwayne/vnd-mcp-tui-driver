@@ -166,3 +166,19 @@ pub struct ClickAtParams {
     /// Y coordinate (1-based row)
     pub y: u16,
 }
+
+/// Parameters for running JavaScript code
+#[derive(Debug, Deserialize)]
+pub struct RunCodeParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// JavaScript code to execute
+    pub code: String,
+}
+
+/// Result of running JavaScript code
+#[derive(Debug, Serialize)]
+pub struct RunCodeResult {
+    /// Result of the script execution
+    pub result: String,
+}

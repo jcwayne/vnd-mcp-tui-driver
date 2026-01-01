@@ -18,8 +18,9 @@ use tui_driver::{Key, LaunchOptions, TuiDriver};
 
 use crate::tools::{
     ClickAtParams, ClickParams, CloseResult, LaunchParams, LaunchResult, PressKeyParams,
-    PressKeysParams, ScreenshotResult, SendTextParams, SessionParams, SnapshotResult,
-    SuccessResult, TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
+    PressKeysParams, RunCodeParams, RunCodeResult, ScreenshotResult, SendTextParams,
+    SessionParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
+    WaitForTextParams, WaitResult,
 };
 
 /// JSON-RPC 2.0 request
@@ -420,6 +421,24 @@ impl McpServer {
                         },
                         "required": ["session_id", "ref_id"]
                     }
+                },
+                {
+                    "name": "tui_run_code",
+                    "description": "Execute JavaScript code with tui object for complex automation. Available: tui.text(), tui.sendText(text), tui.pressKey(key), tui.clickAt(x,y), tui.snapshot()",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "code": {
+                                "type": "string",
+                                "description": "JavaScript code to execute"
+                            }
+                        },
+                        "required": ["session_id", "code"]
+                    }
                 }
             ]
         });
@@ -449,6 +468,7 @@ impl McpServer {
             "tui_click_at" => self.tool_click_at(id, arguments).await,
             "tui_double_click" => self.tool_double_click(id, arguments).await,
             "tui_right_click" => self.tool_right_click(id, arguments).await,
+            "tui_run_code" => self.tool_run_code(id, arguments).await,
             _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -1156,6 +1176,58 @@ impl McpServer {
                             {
                                 "type": "text",
                                 "text": format!("Error right-clicking element: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_run_code tool
+    async fn tool_run_code(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: RunCodeParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match crate::boa::execute_script(driver, &params.code) {
+                Ok(result_str) => {
+                    let result = RunCodeResult { result: result_str };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error executing JavaScript: {}", e)
                             }
                         ],
                         "isError": true
