@@ -18,9 +18,8 @@ use tui_driver::{Key, LaunchOptions, TuiDriver};
 
 use crate::tools::{
     ClickAtParams, ClickParams, CloseResult, LaunchParams, LaunchResult, PressKeyParams,
-    PressKeysParams, RunCodeParams, RunCodeResult, ScreenshotResult, SendTextParams,
-    SessionParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
-    WaitForTextParams, WaitResult,
+    PressKeysParams, RunCodeParams, RunCodeResult, ScreenshotResult, SendTextParams, SessionParams,
+    SnapshotResult, SuccessResult, TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
 };
 
 /// JSON-RPC 2.0 request
