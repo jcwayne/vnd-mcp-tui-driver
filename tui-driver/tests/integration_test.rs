@@ -176,3 +176,27 @@ async fn test_screenshot() {
 
     driver.close().await.ok();
 }
+
+#[tokio::test]
+async fn test_click_at() {
+    let options = LaunchOptions::new("bash")
+        .args(vec!["--norc".to_string(), "--noprofile".to_string()]);
+
+    let driver = TuiDriver::launch(options).await.expect("Failed to launch");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Click should not error (even if bash doesn't respond to mouse)
+    let result = driver.click_at(5, 5);
+    assert!(result.is_ok(), "click_at should succeed");
+
+    // Invalid coordinates should error
+    let result = driver.click_at(0, 0);
+    assert!(result.is_err(), "click_at(0,0) should fail");
+
+    // Out of bounds should error
+    let result = driver.click_at(1000, 1000);
+    assert!(result.is_err(), "click_at out of bounds should fail");
+
+    driver.send_text("exit\n").ok();
+    driver.close().await.ok();
+}
