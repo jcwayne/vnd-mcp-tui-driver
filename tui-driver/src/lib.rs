@@ -3,9 +3,11 @@
 pub mod driver;
 pub mod error;
 pub mod keys;
+pub mod mouse;
 pub mod snapshot;
 
 pub use driver::{LaunchOptions, TuiDriver};
 pub use error::{Result, TuiError};
 pub use keys::Key;
+pub use mouse::MouseButton;
 pub use snapshot::{build_snapshot, render_screenshot, Row, Screenshot, Snapshot, Span};
