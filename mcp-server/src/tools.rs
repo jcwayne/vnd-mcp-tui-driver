@@ -50,3 +50,77 @@ pub struct TextResult {
 pub struct CloseResult {
     pub success: bool,
 }
+
+/// Parameters for pressing a single key
+#[derive(Debug, Deserialize)]
+pub struct PressKeyParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Key to press (e.g., "Enter", "Tab", "Ctrl+c", "a")
+    pub key: String,
+}
+
+/// Parameters for pressing multiple keys
+#[derive(Debug, Deserialize)]
+pub struct PressKeysParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Keys to press in sequence
+    pub keys: Vec<String>,
+}
+
+/// Parameters for sending raw text
+#[derive(Debug, Deserialize)]
+pub struct SendTextParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Text to send to the terminal
+    pub text: String,
+}
+
+/// Parameters for waiting for text to appear
+#[derive(Debug, Deserialize)]
+pub struct WaitForTextParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Text to wait for
+    pub text: String,
+    /// Timeout in milliseconds (default: 5000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+/// Parameters for waiting for screen to become idle
+#[derive(Debug, Deserialize)]
+pub struct WaitForIdleParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// How long screen must be stable to be considered idle (default: 100ms)
+    #[serde(default = "default_idle_ms")]
+    pub idle_ms: u64,
+    /// Timeout in milliseconds (default: 5000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+fn default_timeout() -> u64 {
+    5000
+}
+
+fn default_idle_ms() -> u64 {
+    100
+}
+
+/// Result of a wait operation
+#[derive(Debug, Serialize)]
+pub struct WaitResult {
+    /// Whether the condition was met before timeout
+    pub found: bool,
+}
+
+/// Result indicating success
+#[derive(Debug, Serialize)]
+pub struct SuccessResult {
+    /// Whether the operation succeeded
+    pub success: bool,
+}

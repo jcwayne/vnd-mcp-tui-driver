@@ -13,9 +13,12 @@ use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
-use tui_driver::{LaunchOptions, TuiDriver};
+use tui_driver::{Key, LaunchOptions, TuiDriver};
 
-use crate::tools::{CloseResult, LaunchParams, LaunchResult, SessionParams, TextResult};
+use crate::tools::{
+    CloseResult, LaunchParams, LaunchResult, PressKeyParams, PressKeysParams, SendTextParams,
+    SessionParams, SuccessResult, TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
+};
 
 /// JSON-RPC 2.0 request
 #[derive(Debug, Deserialize)]
@@ -209,6 +212,108 @@ impl McpServer {
                         },
                         "required": ["session_id"]
                     }
+                },
+                {
+                    "name": "tui_press_key",
+                    "description": "Press a single key in the TUI session. Supports special keys (Enter, Tab, Escape, etc.), arrow keys, function keys, and modifier combinations (Ctrl+c, Alt+x).",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "key": {
+                                "type": "string",
+                                "description": "Key to press (e.g., 'Enter', 'Tab', 'Ctrl+c', 'a')"
+                            }
+                        },
+                        "required": ["session_id", "key"]
+                    }
+                },
+                {
+                    "name": "tui_press_keys",
+                    "description": "Press multiple keys in sequence in the TUI session",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "keys": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Keys to press in sequence"
+                            }
+                        },
+                        "required": ["session_id", "keys"]
+                    }
+                },
+                {
+                    "name": "tui_send_text",
+                    "description": "Send raw text to the TUI session (useful for typing strings)",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "Text to send to the terminal"
+                            }
+                        },
+                        "required": ["session_id", "text"]
+                    }
+                },
+                {
+                    "name": "tui_wait_for_text",
+                    "description": "Wait for specific text to appear on the screen",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "Text to wait for"
+                            },
+                            "timeout_ms": {
+                                "type": "integer",
+                                "description": "Timeout in milliseconds",
+                                "default": 5000
+                            }
+                        },
+                        "required": ["session_id", "text"]
+                    }
+                },
+                {
+                    "name": "tui_wait_for_idle",
+                    "description": "Wait for the screen to stop changing (become idle)",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "idle_ms": {
+                                "type": "integer",
+                                "description": "How long screen must be stable to be considered idle",
+                                "default": 100
+                            },
+                            "timeout_ms": {
+                                "type": "integer",
+                                "description": "Timeout in milliseconds",
+                                "default": 5000
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
                 }
             ]
         });
@@ -227,6 +332,11 @@ impl McpServer {
             "tui_launch" => self.tool_launch(id, arguments).await,
             "tui_text" => self.tool_text(id, arguments).await,
             "tui_close" => self.tool_close(id, arguments).await,
+            "tui_press_key" => self.tool_press_key(id, arguments).await,
+            "tui_press_keys" => self.tool_press_keys(id, arguments).await,
+            "tui_send_text" => self.tool_send_text(id, arguments).await,
+            "tui_wait_for_text" => self.tool_wait_for_text(id, arguments).await,
+            "tui_wait_for_idle" => self.tool_wait_for_idle(id, arguments).await,
             _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -342,6 +452,309 @@ impl McpServer {
                     ]
                 });
                 JsonRpcResponse::success(id, content)
+            }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_press_key tool
+    async fn tool_press_key(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: PressKeyParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        // Parse the key string
+        let key = match Key::parse(&params.key) {
+            Ok(k) => k,
+            Err(e) => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Invalid key: {}", e)
+                        }
+                    ],
+                    "isError": true
+                });
+                return JsonRpcResponse::success(id, content);
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.press_key(&key) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error pressing key: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_press_keys tool
+    async fn tool_press_keys(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: PressKeysParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        // Parse all keys first
+        let mut keys = Vec::new();
+        for key_str in &params.keys {
+            match Key::parse(key_str) {
+                Ok(k) => keys.push(k),
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Invalid key '{}': {}", key_str, e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    return JsonRpcResponse::success(id, content);
+                }
+            }
+        }
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.press_keys(&keys) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error pressing keys: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_send_text tool
+    async fn tool_send_text(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: SendTextParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.send_text(&params.text) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error sending text: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_wait_for_text tool
+    async fn tool_wait_for_text(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: WaitForTextParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.wait_for_text(&params.text, params.timeout_ms).await {
+                Ok(found) => {
+                    let result = WaitResult { found };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error waiting for text: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_wait_for_idle tool
+    async fn tool_wait_for_idle(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: WaitForIdleParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                match driver
+                    .wait_for_idle(params.idle_ms, params.timeout_ms)
+                    .await
+                {
+                    Ok(()) => {
+                        let result = SuccessResult { success: true };
+                        let content = json!({
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": serde_json::to_string(&result).unwrap()
+                                }
+                            ]
+                        });
+                        JsonRpcResponse::success(id, content)
+                    }
+                    Err(e) => {
+                        // Timeout is not really an error, just means it didn't become idle
+                        let content = json!({
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": format!("Timeout waiting for idle: {}", e)
+                                }
+                            ],
+                            "isError": true
+                        });
+                        JsonRpcResponse::success(id, content)
+                    }
+                }
             }
             None => {
                 let content = json!({
