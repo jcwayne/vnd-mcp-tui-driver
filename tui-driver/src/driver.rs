@@ -2,6 +2,7 @@
 
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
+use crate::mouse::{mouse_click, mouse_double_click, MouseButton};
 use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
@@ -328,6 +329,95 @@ impl TuiDriver {
         child.kill().ok();
 
         Ok(())
+    }
+
+    /// Validate that coordinates are within terminal bounds.
+    ///
+    /// Coordinates must be 1-based and within the terminal dimensions.
+    /// Returns an error if x=0, y=0, x>cols, or y>rows.
+    fn validate_coordinates(&self, x: u16, y: u16) -> Result<()> {
+        if x == 0 || y == 0 || x > self.cols || y > self.rows {
+            return Err(TuiError::InvalidCoordinates { x, y });
+        }
+        Ok(())
+    }
+
+    /// Send mouse event bytes to the terminal.
+    fn send_mouse_event(&self, bytes: &[u8]) -> Result<()> {
+        if !self.is_running() {
+            return Err(TuiError::SessionClosed);
+        }
+
+        let mut writer = self.master_writer.lock();
+        writer.write_all(bytes)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Click at the specified coordinates.
+    ///
+    /// Coordinates are 1-based (x=column, y=row).
+    /// Returns an error if coordinates are out of bounds.
+    pub fn click_at(&self, x: u16, y: u16) -> Result<()> {
+        self.validate_coordinates(x, y)?;
+        let bytes = mouse_click(MouseButton::Left, x, y);
+        self.send_mouse_event(&bytes)
+    }
+
+    /// Click on an element by reference ID.
+    ///
+    /// Uses the current snapshot to find the element's coordinates.
+    /// Returns an error if the reference is not found.
+    pub fn click(&self, ref_id: &str) -> Result<()> {
+        let snapshot = self.snapshot();
+        let span = snapshot
+            .get_by_ref(ref_id)
+            .ok_or_else(|| TuiError::RefNotFound(ref_id.to_string()))?;
+        self.click_at(span.x, span.y)
+    }
+
+    /// Double-click at the specified coordinates.
+    ///
+    /// Coordinates are 1-based (x=column, y=row).
+    /// Returns an error if coordinates are out of bounds.
+    pub fn double_click_at(&self, x: u16, y: u16) -> Result<()> {
+        self.validate_coordinates(x, y)?;
+        let bytes = mouse_double_click(MouseButton::Left, x, y);
+        self.send_mouse_event(&bytes)
+    }
+
+    /// Double-click on an element by reference ID.
+    ///
+    /// Uses the current snapshot to find the element's coordinates.
+    /// Returns an error if the reference is not found.
+    pub fn double_click(&self, ref_id: &str) -> Result<()> {
+        let snapshot = self.snapshot();
+        let span = snapshot
+            .get_by_ref(ref_id)
+            .ok_or_else(|| TuiError::RefNotFound(ref_id.to_string()))?;
+        self.double_click_at(span.x, span.y)
+    }
+
+    /// Right-click at the specified coordinates.
+    ///
+    /// Coordinates are 1-based (x=column, y=row).
+    /// Returns an error if coordinates are out of bounds.
+    pub fn right_click_at(&self, x: u16, y: u16) -> Result<()> {
+        self.validate_coordinates(x, y)?;
+        let bytes = mouse_click(MouseButton::Right, x, y);
+        self.send_mouse_event(&bytes)
+    }
+
+    /// Right-click on an element by reference ID.
+    ///
+    /// Uses the current snapshot to find the element's coordinates.
+    /// Returns an error if the reference is not found.
+    pub fn right_click(&self, ref_id: &str) -> Result<()> {
+        let snapshot = self.snapshot();
+        let span = snapshot
+            .get_by_ref(ref_id)
+            .ok_or_else(|| TuiError::RefNotFound(ref_id.to_string()))?;
+        self.right_click_at(span.x, span.y)
     }
 }
 

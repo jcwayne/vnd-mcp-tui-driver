@@ -23,6 +23,9 @@ pub enum TuiError {
     #[error("Invalid coordinates: ({x}, {y})")]
     InvalidCoordinates { x: u16, y: u16 },
 
+    #[error("Element reference not found: {0}")]
+    RefNotFound(String),
+
     #[error("PTY error: {0}")]
     PtyError(String),
 
