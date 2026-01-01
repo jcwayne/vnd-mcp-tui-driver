@@ -2,7 +2,7 @@
 
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
-use crate::snapshot::{build_snapshot, Snapshot};
+use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -231,6 +231,13 @@ impl TuiDriver {
         let parser = self.parser.lock();
         let screen = parser.screen();
         build_snapshot(screen)
+    }
+
+    /// Get a PNG screenshot of the current screen
+    pub fn screenshot(&self) -> Screenshot {
+        let parser = self.parser.lock();
+        let screen = parser.screen();
+        render_screenshot(screen)
     }
 
     /// Send text to the terminal

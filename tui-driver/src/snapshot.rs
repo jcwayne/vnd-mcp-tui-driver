@@ -4,6 +4,7 @@
 //! screen, including individual spans with styling information, rows of
 //! spans, and the complete snapshot structure.
 
+use image::{ImageBuffer, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use vt100::Screen;
 
@@ -495,6 +496,106 @@ fn escape_yaml_string(s: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+}
+
+/// A screenshot represents a PNG image of the terminal screen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Screenshot {
+    /// Base64-encoded PNG image data.
+    pub data: String,
+    /// Image format (always "png").
+    pub format: String,
+    /// Image width in pixels.
+    pub width: u32,
+    /// Image height in pixels.
+    pub height: u32,
+}
+
+/// Render terminal screen to PNG image.
+///
+/// This function creates a simple visual representation of the terminal
+/// by rendering non-empty cells as colored rectangles. The rendering uses
+/// a fixed character size of 10x20 pixels.
+pub fn render_screenshot(screen: &Screen) -> Screenshot {
+    let (rows, cols) = screen.size();
+    let char_width = 10u32;
+    let char_height = 20u32;
+    let width = cols as u32 * char_width;
+    let height = rows as u32 * char_height;
+
+    let mut img: RgbaImage = ImageBuffer::from_pixel(width, height, Rgba([0, 0, 0, 255]));
+
+    // Simple rendering: fill rectangles for non-empty cells
+    for row in 0..rows {
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                let contents = cell.contents();
+                if !contents.is_empty() && contents != " " {
+                    let px = col as u32 * char_width;
+                    let py = row as u32 * char_height;
+
+                    let fg = match cell.fgcolor() {
+                        vt100::Color::Default => Rgba([255, 255, 255, 255]),
+                        vt100::Color::Idx(i) => ansi_to_rgba(i),
+                        vt100::Color::Rgb(r, g, b) => Rgba([r, g, b, 255]),
+                    };
+
+                    // Fill cell area
+                    for dx in 2..char_width - 2 {
+                        for dy in 4..char_height - 4 {
+                            if px + dx < width && py + dy < height {
+                                img.put_pixel(px + dx, py + dy, fg);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Encode to PNG
+    let mut buffer = Vec::new();
+    {
+        use image::codecs::png::PngEncoder;
+        use image::ImageEncoder;
+        let encoder = PngEncoder::new(&mut buffer);
+        encoder
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .expect("Failed to encode PNG");
+    }
+
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(&buffer);
+
+    Screenshot {
+        data,
+        format: "png".to_string(),
+        width,
+        height,
+    }
+}
+
+/// Convert ANSI color index to RGBA.
+fn ansi_to_rgba(idx: u8) -> Rgba<u8> {
+    match idx {
+        0 => Rgba([0, 0, 0, 255]),
+        1 => Rgba([205, 0, 0, 255]),
+        2 => Rgba([0, 205, 0, 255]),
+        3 => Rgba([205, 205, 0, 255]),
+        4 => Rgba([0, 0, 238, 255]),
+        5 => Rgba([205, 0, 205, 255]),
+        6 => Rgba([0, 205, 205, 255]),
+        7 => Rgba([229, 229, 229, 255]),
+        8 => Rgba([127, 127, 127, 255]),
+        9 => Rgba([255, 0, 0, 255]),
+        10 => Rgba([0, 255, 0, 255]),
+        11 => Rgba([255, 255, 0, 255]),
+        12 => Rgba([92, 92, 255, 255]),
+        13 => Rgba([255, 0, 255, 255]),
+        14 => Rgba([0, 255, 255, 255]),
+        15 => Rgba([255, 255, 255, 255]),
+        _ => Rgba([200, 200, 200, 255]),
+    }
 }
 
 #[cfg(test)]

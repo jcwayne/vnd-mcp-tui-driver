@@ -8,4 +8,4 @@ pub mod snapshot;
 pub use driver::{LaunchOptions, TuiDriver};
 pub use error::{Result, TuiError};
 pub use keys::Key;
-pub use snapshot::{build_snapshot, Row, Snapshot, Span};
+pub use snapshot::{build_snapshot, render_screenshot, Row, Screenshot, Snapshot, Span};
