@@ -10,11 +10,69 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
+
+/// Directory for storing closed session debug data
+const CLOSED_SESSIONS_DIR: &str = "/tmp/tui-driver-sessions";
+
+/// Data saved when a session is closed (for post-mortem debugging)
+#[derive(Debug, Serialize, Deserialize)]
+struct ClosedSessionData {
+    session_id: String,
+    command: String,
+    input_buffer: String,
+    output_buffer: String,
+    scrollback_lines: usize,
+    closed_at: u64,
+}
+
+/// Get the path for a closed session's data file
+fn closed_session_path(session_id: &str) -> PathBuf {
+    PathBuf::from(CLOSED_SESSIONS_DIR).join(format!("{}.json", session_id))
+}
+
+/// Save closed session data to disk
+fn save_closed_session(driver: &TuiDriver) -> Result<()> {
+    // Ensure directory exists
+    fs::create_dir_all(CLOSED_SESSIONS_DIR)?;
+
+    let info = driver.info();
+    let data = ClosedSessionData {
+        session_id: info.session_id.clone(),
+        command: info.command,
+        input_buffer: driver.get_input_buffer(10000),
+        output_buffer: driver.get_output_buffer(10000),
+        scrollback_lines: driver.get_scrollback(),
+        closed_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+
+    let path = closed_session_path(&info.session_id);
+    let json = serde_json::to_string_pretty(&data)?;
+    fs::write(path, json)?;
+
+    Ok(())
+}
+
+/// Load closed session data from disk
+fn load_closed_session(session_id: &str) -> Option<ClosedSessionData> {
+    let path = closed_session_path(session_id);
+    if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+    } else {
+        None
+    }
+}
 
 use crate::tools::{
     BufferResult, ClickAtParams, ClickParams, CloseResult, GetInputParams, GetOutputParams,
@@ -696,6 +754,11 @@ impl McpServer {
         let mut sessions = self.sessions.lock().await;
         match sessions.remove(&params.session_id) {
             Some(driver) => {
+                // Save debug buffers to disk before closing
+                if let Err(e) = save_closed_session(&driver) {
+                    error!("Error saving closed session data: {}", e);
+                }
+
                 // Close the driver
                 if let Err(e) = driver.close().await {
                     error!("Error closing session: {}", e);
@@ -1594,16 +1657,38 @@ impl McpServer {
                 JsonRpcResponse::success(id, response_content)
             }
             None => {
-                let content = json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Session not found: {}", params.session_id)
-                        }
-                    ],
-                    "isError": true
-                });
-                JsonRpcResponse::success(id, content)
+                // Check for closed session on disk
+                if let Some(closed) = load_closed_session(&params.session_id) {
+                    let content = if params.chars >= closed.input_buffer.len() {
+                        closed.input_buffer
+                    } else {
+                        closed.input_buffer.chars().rev().take(params.chars).collect::<String>().chars().rev().collect()
+                    };
+                    let result = BufferResult {
+                        length: content.len(),
+                        content,
+                    };
+                    let response_content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, response_content)
+                } else {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Session not found: {}", params.session_id)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
             }
         }
     }
@@ -1636,16 +1721,38 @@ impl McpServer {
                 JsonRpcResponse::success(id, response_content)
             }
             None => {
-                let content = json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Session not found: {}", params.session_id)
-                        }
-                    ],
-                    "isError": true
-                });
-                JsonRpcResponse::success(id, content)
+                // Check for closed session on disk
+                if let Some(closed) = load_closed_session(&params.session_id) {
+                    let content = if params.chars >= closed.output_buffer.len() {
+                        closed.output_buffer
+                    } else {
+                        closed.output_buffer.chars().rev().take(params.chars).collect::<String>().chars().rev().collect()
+                    };
+                    let result = BufferResult {
+                        length: content.len(),
+                        content,
+                    };
+                    let response_content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, response_content)
+                } else {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Session not found: {}", params.session_id)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
             }
         }
     }
@@ -1675,16 +1782,30 @@ impl McpServer {
                 JsonRpcResponse::success(id, content)
             }
             None => {
-                let content = json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Session not found: {}", params.session_id)
-                        }
-                    ],
-                    "isError": true
-                });
-                JsonRpcResponse::success(id, content)
+                // Check for closed session on disk
+                if let Some(closed) = load_closed_session(&params.session_id) {
+                    let result = ScrollbackResult { lines: closed.scrollback_lines };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                } else {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Session not found: {}", params.session_id)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
             }
         }
     }
