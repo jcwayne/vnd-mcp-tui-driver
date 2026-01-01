@@ -3,6 +3,7 @@
 //! This server exposes TUI automation capabilities via the Model Context Protocol (MCP).
 //! It communicates over stdin/stdout using JSON-RPC 2.0.
 
+mod boa;
 mod tools;
 
 use anyhow::Result;
