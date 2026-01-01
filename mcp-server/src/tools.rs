@@ -146,3 +146,23 @@ pub struct ScreenshotResult {
     /// Image height in pixels
     pub height: u32,
 }
+
+/// Parameters for clicking on an element by reference ID
+#[derive(Debug, Deserialize)]
+pub struct ClickParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Element reference ID from snapshot
+    pub ref_id: String,
+}
+
+/// Parameters for clicking at specific coordinates
+#[derive(Debug, Deserialize)]
+pub struct ClickAtParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// X coordinate (1-based column)
+    pub x: u16,
+    /// Y coordinate (1-based row)
+    pub y: u16,
+}

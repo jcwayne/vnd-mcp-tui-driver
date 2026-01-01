@@ -16,9 +16,9 @@ use tracing::{debug, error, info};
 use tui_driver::{Key, LaunchOptions, TuiDriver};
 
 use crate::tools::{
-    CloseResult, LaunchParams, LaunchResult, PressKeyParams, PressKeysParams, ScreenshotResult,
-    SendTextParams, SessionParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
-    WaitForTextParams, WaitResult,
+    ClickAtParams, ClickParams, CloseResult, LaunchParams, LaunchResult, PressKeyParams,
+    PressKeysParams, ScreenshotResult, SendTextParams, SessionParams, SnapshotResult,
+    SuccessResult, TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
 };
 
 /// JSON-RPC 2.0 request
@@ -343,6 +343,82 @@ impl McpServer {
                         },
                         "required": ["session_id"]
                     }
+                },
+                {
+                    "name": "tui_click",
+                    "description": "Click on an element by reference ID from the snapshot",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Element reference ID from snapshot (e.g., 'span-1')"
+                            }
+                        },
+                        "required": ["session_id", "ref_id"]
+                    }
+                },
+                {
+                    "name": "tui_click_at",
+                    "description": "Click at specific coordinates in the terminal",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "x": {
+                                "type": "integer",
+                                "description": "X coordinate (1-based column)"
+                            },
+                            "y": {
+                                "type": "integer",
+                                "description": "Y coordinate (1-based row)"
+                            }
+                        },
+                        "required": ["session_id", "x", "y"]
+                    }
+                },
+                {
+                    "name": "tui_double_click",
+                    "description": "Double-click on an element by reference ID from the snapshot",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Element reference ID from snapshot (e.g., 'span-1')"
+                            }
+                        },
+                        "required": ["session_id", "ref_id"]
+                    }
+                },
+                {
+                    "name": "tui_right_click",
+                    "description": "Right-click on an element by reference ID from the snapshot",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Element reference ID from snapshot (e.g., 'span-1')"
+                            }
+                        },
+                        "required": ["session_id", "ref_id"]
+                    }
                 }
             ]
         });
@@ -368,6 +444,10 @@ impl McpServer {
             "tui_wait_for_idle" => self.tool_wait_for_idle(id, arguments).await,
             "tui_snapshot" => self.tool_snapshot(id, arguments).await,
             "tui_screenshot" => self.tool_screenshot(id, arguments).await,
+            "tui_click" => self.tool_click(id, arguments).await,
+            "tui_click_at" => self.tool_click_at(id, arguments).await,
+            "tui_double_click" => self.tool_double_click(id, arguments).await,
+            "tui_right_click" => self.tool_right_click(id, arguments).await,
             _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -874,6 +954,214 @@ impl McpServer {
                 });
                 JsonRpcResponse::success(id, content)
             }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_click tool
+    async fn tool_click(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: ClickParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.click(&params.ref_id) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error clicking element: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_click_at tool
+    async fn tool_click_at(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: ClickAtParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.click_at(params.x, params.y) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error clicking at coordinates: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_double_click tool
+    async fn tool_double_click(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: ClickParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.double_click(&params.ref_id) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error double-clicking element: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_right_click tool
+    async fn tool_right_click(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: ClickParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.right_click(&params.ref_id) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error right-clicking element: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
             None => {
                 let content = json!({
                     "content": [
