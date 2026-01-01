@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
 
 use crate::tools::{
@@ -143,7 +143,7 @@ impl McpServer {
 
     /// Handle the initialize method
     async fn handle_initialize(&self, id: Value, _params: Value) -> JsonRpcResponse {
-        info!("MCP server initializing");
+        debug!("MCP server initializing");
 
         let result = json!({
             "protocolVersion": "2024-11-05",
@@ -1714,15 +1714,16 @@ fn write_response(response: &JsonRpcResponse) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging to stderr (stdout is for MCP messages)
+    // Default to warn level; set RUST_LOG=mcp_tui_driver=debug for verbose logging
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("mcp_tui_driver=debug".parse().unwrap()),
+                .add_directive("mcp_tui_driver=warn".parse().unwrap()),
         )
         .with_writer(std::io::stderr)
         .init();
 
-    info!("MCP TUI Driver starting");
+    debug!("MCP TUI Driver starting");
 
     let server = McpServer::new();
     let mut stdin = std::io::stdin().lock();
@@ -1766,7 +1767,7 @@ async fn main() -> Result<()> {
             }
             Ok(None) => {
                 // EOF - stdin closed
-                info!("stdin closed, exiting");
+                debug!("stdin closed, exiting");
                 break;
             }
             Err(e) => {
@@ -1776,6 +1777,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    info!("MCP TUI Driver shutting down");
+    debug!("MCP TUI Driver shutting down");
     Ok(())
 }
