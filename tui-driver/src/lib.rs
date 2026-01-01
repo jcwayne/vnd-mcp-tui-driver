@@ -4,4 +4,4 @@ pub mod driver;
 pub mod error;
 
 pub use driver::TuiDriver;
-pub use error::TuiError;
+pub use error::{Result, TuiError};

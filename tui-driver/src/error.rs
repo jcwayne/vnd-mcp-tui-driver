@@ -1,11 +1,34 @@
-//! Error types for TUI Driver
+//! Error types for tui-driver
 
 use thiserror::Error;
 
-/// Error type for TUI Driver operations
-#[derive(Debug, Error)]
+/// Errors that can occur in tui-driver operations
+#[derive(Error, Debug)]
 pub enum TuiError {
-    /// Placeholder error variant
-    #[error("TUI error: {0}")]
-    Generic(String),
+    #[error("Failed to launch process: {0}")]
+    LaunchFailed(String),
+
+    #[error("Session not found: {0}")]
+    SessionNotFound(String),
+
+    #[error("Session already closed")]
+    SessionClosed,
+
+    #[error("Timeout waiting for condition")]
+    Timeout,
+
+    #[error("Invalid key: {0}")]
+    InvalidKey(String),
+
+    #[error("Invalid coordinates: ({x}, {y})")]
+    InvalidCoordinates { x: u16, y: u16 },
+
+    #[error("PTY error: {0}")]
+    PtyError(String),
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
 }
+
+/// Result type alias for tui-driver operations
+pub type Result<T> = std::result::Result<T, TuiError>;
