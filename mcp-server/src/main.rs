@@ -14,12 +14,13 @@ use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
-use tui_driver::{Key, LaunchOptions, TuiDriver};
+use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
 
 use crate::tools::{
-    ClickAtParams, ClickParams, CloseResult, LaunchParams, LaunchResult, PressKeyParams,
-    PressKeysParams, RunCodeParams, RunCodeResult, ScreenshotResult, SendTextParams, SessionParams,
-    SnapshotResult, SuccessResult, TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
+    ClickAtParams, ClickParams, CloseResult, LaunchParams, LaunchResult, ListSessionsResult,
+    PressKeyParams, PressKeysParams, ResizeParams, RunCodeParams, RunCodeResult, ScreenshotResult,
+    SendTextParams, SessionInfoResult, SessionParams, SignalParams, SnapshotResult, SuccessResult,
+    TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
 };
 
 /// JSON-RPC 2.0 request
@@ -99,6 +100,10 @@ impl SessionManager {
 
     fn remove(&mut self, session_id: &str) -> Option<TuiDriver> {
         self.sessions.remove(session_id)
+    }
+
+    fn list(&self) -> Vec<String> {
+        self.sessions.keys().cloned().collect()
     }
 }
 
@@ -438,6 +443,69 @@ impl McpServer {
                         },
                         "required": ["session_id", "code"]
                     }
+                },
+                {
+                    "name": "tui_resize",
+                    "description": "Resize the terminal window",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "cols": {
+                                "type": "integer",
+                                "description": "New terminal width in columns"
+                            },
+                            "rows": {
+                                "type": "integer",
+                                "description": "New terminal height in rows"
+                            }
+                        },
+                        "required": ["session_id", "cols", "rows"]
+                    }
+                },
+                {
+                    "name": "tui_send_signal",
+                    "description": "Send a signal to the TUI process (SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT)",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "signal": {
+                                "type": "string",
+                                "description": "Signal name (SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT)"
+                            }
+                        },
+                        "required": ["session_id", "signal"]
+                    }
+                },
+                {
+                    "name": "tui_list_sessions",
+                    "description": "List all active TUI sessions",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                },
+                {
+                    "name": "tui_get_session",
+                    "description": "Get information about a TUI session",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
                 }
             ]
         });
@@ -468,6 +536,10 @@ impl McpServer {
             "tui_double_click" => self.tool_double_click(id, arguments).await,
             "tui_right_click" => self.tool_right_click(id, arguments).await,
             "tui_run_code" => self.tool_run_code(id, arguments).await,
+            "tui_resize" => self.tool_resize(id, arguments).await,
+            "tui_send_signal" => self.tool_send_signal(id, arguments).await,
+            "tui_list_sessions" => self.tool_list_sessions(id).await,
+            "tui_get_session" => self.tool_get_session(id, arguments).await,
             _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -1234,6 +1306,195 @@ impl McpServer {
                     JsonRpcResponse::success(id, content)
                 }
             },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_resize tool
+    async fn tool_resize(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: ResizeParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.resize(params.cols, params.rows) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error resizing terminal: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_send_signal tool
+    async fn tool_send_signal(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: SignalParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        // Parse signal name to Signal enum
+        let signal = match params.signal.to_uppercase().as_str() {
+            "SIGINT" | "INT" => Signal::Int,
+            "SIGTERM" | "TERM" => Signal::Term,
+            "SIGKILL" | "KILL" => Signal::Kill,
+            "SIGHUP" | "HUP" => Signal::Hup,
+            "SIGQUIT" | "QUIT" => Signal::Quit,
+            _ => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Unknown signal: {}. Supported signals: SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT", params.signal)
+                        }
+                    ],
+                    "isError": true
+                });
+                return JsonRpcResponse::success(id, content);
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.send_signal(signal) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string(&result).unwrap()
+                            }
+                        ]
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+                Err(e) => {
+                    let content = json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Error sending signal: {}", e)
+                            }
+                        ],
+                        "isError": true
+                    });
+                    JsonRpcResponse::success(id, content)
+                }
+            },
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_list_sessions tool
+    async fn tool_list_sessions(&self, id: Value) -> JsonRpcResponse {
+        let sessions = self.sessions.lock().await;
+        let session_ids = sessions.list();
+
+        let result = ListSessionsResult {
+            sessions: session_ids,
+        };
+        let content = json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": serde_json::to_string(&result).unwrap()
+                }
+            ]
+        });
+        JsonRpcResponse::success(id, content)
+    }
+
+    /// Handle tui_get_session tool
+    async fn tool_get_session(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: SessionParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let info = driver.info();
+                let result = SessionInfoResult {
+                    session_id: info.session_id,
+                    command: info.command,
+                    cols: info.cols,
+                    rows: info.rows,
+                    running: info.running,
+                };
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap()
+                        }
+                    ]
+                });
+                JsonRpcResponse::success(id, content)
+            }
             None => {
                 let content = json!({
                     "content": [

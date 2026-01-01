@@ -182,3 +182,45 @@ pub struct RunCodeResult {
     /// Result of the script execution
     pub result: String,
 }
+
+/// Parameters for resizing the terminal
+#[derive(Debug, Deserialize)]
+pub struct ResizeParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// New terminal width in columns
+    pub cols: u16,
+    /// New terminal height in rows
+    pub rows: u16,
+}
+
+/// Parameters for sending a signal to the process
+#[derive(Debug, Deserialize)]
+pub struct SignalParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Signal to send (SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT)
+    pub signal: String,
+}
+
+/// Result of listing sessions
+#[derive(Debug, Serialize)]
+pub struct ListSessionsResult {
+    /// List of active session IDs
+    pub sessions: Vec<String>,
+}
+
+/// Result of getting session info
+#[derive(Debug, Serialize)]
+pub struct SessionInfoResult {
+    /// Session identifier
+    pub session_id: String,
+    /// Command that was launched
+    pub command: String,
+    /// Terminal width in columns
+    pub cols: u16,
+    /// Terminal height in rows
+    pub rows: u16,
+    /// Whether the process is still running
+    pub running: bool,
+}
