@@ -25,7 +25,8 @@ async fn test_launch_and_text_snapshot() {
 #[tokio::test]
 async fn test_launch_interactive_command() {
     // Launch bash and send a command
-    let options = LaunchOptions::new("bash").args(vec!["--norc".to_string(), "--noprofile".to_string()]);
+    let options =
+        LaunchOptions::new("bash").args(vec!["--norc".to_string(), "--noprofile".to_string()]);
 
     let driver = TuiDriver::launch(options).await.expect("Failed to launch");
 
@@ -33,7 +34,9 @@ async fn test_launch_interactive_command() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Send a command
-    driver.send_text("echo TEST_OUTPUT\n").expect("Failed to send text");
+    driver
+        .send_text("echo TEST_OUTPUT\n")
+        .expect("Failed to send text");
 
     // Wait for output
     let found = driver
@@ -52,7 +55,8 @@ async fn test_launch_interactive_command() {
 
 #[tokio::test]
 async fn test_wait_for_idle() {
-    let options = LaunchOptions::new("bash").args(vec!["--norc".to_string(), "--noprofile".to_string()]);
+    let options =
+        LaunchOptions::new("bash").args(vec!["--norc".to_string(), "--noprofile".to_string()]);
 
     let driver = TuiDriver::launch(options).await.expect("Failed to launch");
 

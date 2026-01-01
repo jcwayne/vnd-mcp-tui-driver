@@ -126,7 +126,11 @@ impl TuiDriver {
             .map_err(|e| TuiError::PtyError(e.to_string()))?;
 
         // Initialize parser
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(options.rows, options.cols, 0)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(
+            options.rows,
+            options.cols,
+            0,
+        )));
         let last_update = Arc::new(AtomicU64::new(current_timestamp_ms()));
         let running = Arc::new(AtomicBool::new(true));
 

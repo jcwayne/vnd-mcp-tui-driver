@@ -124,7 +124,9 @@ impl McpServer {
             }
             "tools/list" => self.handle_tools_list(id).await,
             "tools/call" => self.handle_tools_call(id, request.params).await,
-            _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
+            _ => {
+                JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method))
+            }
         }
     }
 
@@ -216,10 +218,7 @@ impl McpServer {
 
     /// Handle the tools/call method
     async fn handle_tools_call(&self, id: Value, params: Value) -> JsonRpcResponse {
-        let tool_name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
         debug!("Calling tool: {} with args: {:?}", tool_name, arguments);
