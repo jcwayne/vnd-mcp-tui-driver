@@ -5,6 +5,7 @@
 //! spans, and the complete snapshot structure.
 
 use serde::{Deserialize, Serialize};
+use vt100::Screen;
 
 /// A span represents a contiguous piece of text with uniform styling.
 ///
@@ -233,6 +234,269 @@ impl Default for Snapshot {
     }
 }
 
+/// Convert a vt100 color to a string representation.
+///
+/// Returns None for default colors, otherwise returns a string like
+/// "color0" for indexed colors or "#rrggbb" for RGB colors.
+fn color_to_string(color: vt100::Color) -> Option<String> {
+    match color {
+        vt100::Color::Default => None,
+        vt100::Color::Idx(i) => Some(format!("color{}", i)),
+        vt100::Color::Rgb(r, g, b) => Some(format!("#{:02x}{:02x}{:02x}", r, g, b)),
+    }
+}
+
+/// Check if two cells have the same styling attributes.
+///
+/// Returns true if both cells have identical bold, italic, underline,
+/// inverse, foreground color, and background color attributes.
+fn same_style(a: &vt100::Cell, b: &vt100::Cell) -> bool {
+    a.bold() == b.bold()
+        && a.italic() == b.italic()
+        && a.underline() == b.underline()
+        && a.inverse() == b.inverse()
+        && a.fgcolor() == b.fgcolor()
+        && a.bgcolor() == b.bgcolor()
+}
+
+/// Check if a cell is effectively empty (whitespace with default styling).
+/// This is used to determine span boundaries.
+fn is_empty_cell(cell: &vt100::Cell) -> bool {
+    let contents = cell.contents();
+    let is_blank = contents.is_empty() || contents == " ";
+    let is_default_style = !cell.bold()
+        && !cell.italic()
+        && !cell.underline()
+        && !cell.inverse()
+        && cell.fgcolor() == vt100::Color::Default
+        && cell.bgcolor() == vt100::Color::Default;
+
+    is_blank && is_default_style
+}
+
+/// Build a Snapshot from a vt100 Screen.
+///
+/// This function extracts spans from the terminal screen by:
+/// 1. Iterating through all rows and columns
+/// 2. Grouping consecutive characters with identical styling into spans
+/// 3. Assigning reference IDs like "s1", "s2", etc.
+/// 4. Generating a YAML representation for human readability
+///
+/// Coordinates are 1-based (x=col+1, y=row+1) for user-facing output.
+/// Empty cells and whitespace-only regions are skipped.
+pub fn build_snapshot(screen: &Screen) -> Snapshot {
+    let (num_rows, num_cols) = screen.size();
+    let mut rows: Vec<Row> = Vec::new();
+    let mut span_counter: usize = 0;
+
+    for row_idx in 0..num_rows {
+        let mut row_spans: Vec<Span> = Vec::new();
+        let mut col_idx: u16 = 0;
+
+        while col_idx < num_cols {
+            // Get the current cell
+            let cell = match screen.cell(row_idx, col_idx) {
+                Some(c) => c,
+                None => {
+                    col_idx += 1;
+                    continue;
+                }
+            };
+
+            // Skip empty cells (whitespace with default styling)
+            if is_empty_cell(cell) {
+                col_idx += 1;
+                continue;
+            }
+
+            // Start a new span
+            let start_col = col_idx;
+            let mut text = String::new();
+            let first_cell = cell;
+
+            // Collect consecutive cells with the same style
+            // We continue through whitespace as long as:
+            // 1. The whitespace has the same styling, OR
+            // 2. The whitespace is followed by content with the same styling
+            while col_idx < num_cols {
+                let current_cell = match screen.cell(row_idx, col_idx) {
+                    Some(c) => c,
+                    None => break,
+                };
+
+                // Check if this cell has the same style as the first cell
+                if !same_style(first_cell, current_cell) {
+                    // Style changed - but if this is empty with default style,
+                    // we might want to continue if there's more styled content ahead
+                    if is_empty_cell(current_cell) {
+                        // Look ahead to see if there's more content with our style
+                        let mut found_continuation = false;
+                        let mut lookahead = col_idx + 1;
+                        while lookahead < num_cols {
+                            if let Some(ahead_cell) = screen.cell(row_idx, lookahead) {
+                                if is_empty_cell(ahead_cell) {
+                                    lookahead += 1;
+                                    continue;
+                                }
+                                // Found a non-empty cell
+                                if same_style(first_cell, ahead_cell) {
+                                    found_continuation = true;
+                                }
+                                break;
+                            }
+                            lookahead += 1;
+                        }
+                        if found_continuation {
+                            // Include this whitespace and continue
+                            let contents = current_cell.contents();
+                            if contents.is_empty() {
+                                text.push(' ');
+                            } else {
+                                text.push_str(&contents);
+                            }
+                            col_idx += 1;
+                            continue;
+                        }
+                    }
+                    // Style changed and no continuation found - stop the span
+                    break;
+                }
+
+                let contents = current_cell.contents();
+                if contents.is_empty() {
+                    text.push(' ');
+                } else {
+                    text.push_str(&contents);
+                }
+                col_idx += 1;
+            }
+
+            // Trim trailing whitespace from the span text
+            let trimmed_text = text.trim_end().to_string();
+            if trimmed_text.is_empty() {
+                continue;
+            }
+
+            // Calculate the actual width (number of cells this span occupies)
+            let width = trimmed_text.chars().count() as u16;
+
+            // Create the span with 1-based coordinates
+            span_counter += 1;
+            let ref_id = format!("s{}", span_counter);
+
+            let mut span = Span::new(
+                ref_id,
+                trimmed_text,
+                start_col + 1, // 1-based x coordinate
+                row_idx + 1,   // 1-based y coordinate
+                width,
+            );
+
+            // Add styling attributes (only if non-default)
+            if first_cell.bold() {
+                span.bold = Some(true);
+            }
+            if first_cell.italic() {
+                span.italic = Some(true);
+            }
+            if first_cell.underline() {
+                span.underline = Some(true);
+            }
+            if first_cell.inverse() {
+                span.inverse = Some(true);
+            }
+            if let Some(fg) = color_to_string(first_cell.fgcolor()) {
+                span.fg = Some(fg);
+            }
+            if let Some(bg) = color_to_string(first_cell.bgcolor()) {
+                span.bg = Some(bg);
+            }
+
+            row_spans.push(span);
+        }
+
+        // Only add rows that have spans
+        if !row_spans.is_empty() {
+            rows.push(Row::with_spans(row_idx + 1, row_spans)); // 1-based row number
+        }
+    }
+
+    // Generate the YAML representation
+    let yaml = generate_yaml(&rows);
+
+    // Create the snapshot
+    let spans: Vec<Span> = rows.iter().flat_map(|r| r.spans.clone()).collect();
+    Snapshot {
+        rows,
+        spans,
+        yaml: Some(yaml),
+    }
+}
+
+/// Generate a YAML-like representation of the rows and spans.
+///
+/// The format is:
+/// ```yaml
+/// - row 1:
+///   - span "text" [bold] [ref=s1] (1,1)
+/// ```
+fn generate_yaml(rows: &[Row]) -> String {
+    let mut result = String::new();
+
+    for row in rows {
+        result.push_str(&format!("- row {}:\n", row.row));
+
+        for span in &row.spans {
+            let mut attrs: Vec<String> = Vec::new();
+
+            if span.bold == Some(true) {
+                attrs.push("bold".to_string());
+            }
+            if span.italic == Some(true) {
+                attrs.push("italic".to_string());
+            }
+            if span.underline == Some(true) {
+                attrs.push("underline".to_string());
+            }
+            if span.inverse == Some(true) {
+                attrs.push("inverse".to_string());
+            }
+            if let Some(ref fg) = span.fg {
+                attrs.push(format!("fg={}", fg));
+            }
+            if let Some(ref bg) = span.bg {
+                attrs.push(format!("bg={}", bg));
+            }
+
+            let attrs_str = if attrs.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", attrs.join(", "))
+            };
+
+            result.push_str(&format!(
+                "  - span \"{}\"{}[ref={}] ({},{})\n",
+                escape_yaml_string(&span.text),
+                attrs_str,
+                span.ref_id,
+                span.x,
+                span.y
+            ));
+        }
+    }
+
+    result
+}
+
+/// Escape special characters in a string for YAML output.
+fn escape_yaml_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +609,135 @@ mod tests {
         // Bold should be present since it has a value
         assert!(json.contains("bold"));
         assert!(json.contains("true"));
+    }
+
+    #[test]
+    fn test_build_snapshot_basic() {
+        // Create a parser and write some text to it
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        parser.process(b"Hello World");
+
+        let snapshot = build_snapshot(parser.screen());
+
+        // Should have exactly one span (text with same style grouped together)
+        assert!(!snapshot.is_empty());
+        assert_eq!(snapshot.span_count(), 1);
+
+        // Check the span content
+        let span = &snapshot.spans[0];
+        assert_eq!(span.text, "Hello World");
+        assert_eq!(span.ref_id, "s1");
+        assert_eq!(span.x, 1); // 1-based
+        assert_eq!(span.y, 1); // 1-based
+        assert_eq!(span.width, 11);
+
+        // Should have YAML output
+        assert!(snapshot.yaml.is_some());
+        let yaml = snapshot.yaml.as_ref().unwrap();
+        assert!(yaml.contains("row 1"));
+        assert!(yaml.contains("Hello World"));
+        assert!(yaml.contains("ref=s1"));
+    }
+
+    #[test]
+    fn test_build_snapshot_with_styling() {
+        // Create a parser and write styled text
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        // ESC[1m = bold on, ESC[0m = reset
+        parser.process(b"\x1b[1mBold\x1b[0m Normal");
+
+        let snapshot = build_snapshot(parser.screen());
+
+        // Should have two spans (bold and normal)
+        assert_eq!(snapshot.span_count(), 2);
+
+        // First span should be bold
+        let bold_span = &snapshot.spans[0];
+        assert_eq!(bold_span.text, "Bold");
+        assert_eq!(bold_span.bold, Some(true));
+
+        // Second span should be normal
+        let normal_span = &snapshot.spans[1];
+        assert_eq!(normal_span.text, "Normal");
+        assert!(normal_span.bold.is_none());
+    }
+
+    #[test]
+    fn test_build_snapshot_multiple_rows() {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        parser.process(b"Line 1\r\nLine 2\r\nLine 3");
+
+        let snapshot = build_snapshot(parser.screen());
+
+        assert_eq!(snapshot.row_count(), 3);
+        assert_eq!(snapshot.span_count(), 3);
+
+        // Check each row
+        assert_eq!(snapshot.rows[0].row, 1);
+        assert_eq!(snapshot.rows[0].spans[0].text, "Line 1");
+
+        assert_eq!(snapshot.rows[1].row, 2);
+        assert_eq!(snapshot.rows[1].spans[0].text, "Line 2");
+
+        assert_eq!(snapshot.rows[2].row, 3);
+        assert_eq!(snapshot.rows[2].spans[0].text, "Line 3");
+    }
+
+    #[test]
+    fn test_build_snapshot_with_colors() {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        // ESC[31m = red foreground
+        parser.process(b"\x1b[31mRed Text\x1b[0m");
+
+        let snapshot = build_snapshot(parser.screen());
+
+        assert_eq!(snapshot.span_count(), 1);
+        let span = &snapshot.spans[0];
+        assert_eq!(span.text, "Red Text");
+        // Color 1 is red in standard ANSI
+        assert_eq!(span.fg, Some("color1".to_string()));
+    }
+
+    #[test]
+    fn test_build_snapshot_empty_screen() {
+        let parser = vt100::Parser::new(24, 80, 0);
+        let snapshot = build_snapshot(parser.screen());
+
+        assert!(snapshot.is_empty());
+        assert_eq!(snapshot.row_count(), 0);
+        assert_eq!(snapshot.span_count(), 0);
+    }
+
+    #[test]
+    fn test_color_to_string() {
+        assert_eq!(color_to_string(vt100::Color::Default), None);
+        assert_eq!(color_to_string(vt100::Color::Idx(1)), Some("color1".to_string()));
+        assert_eq!(color_to_string(vt100::Color::Idx(255)), Some("color255".to_string()));
+        assert_eq!(color_to_string(vt100::Color::Rgb(255, 128, 0)), Some("#ff8000".to_string()));
+    }
+
+    #[test]
+    fn test_escape_yaml_string() {
+        assert_eq!(escape_yaml_string("hello"), "hello");
+        assert_eq!(escape_yaml_string("hello\"world"), "hello\\\"world");
+        assert_eq!(escape_yaml_string("line1\nline2"), "line1\\nline2");
+        assert_eq!(escape_yaml_string("tab\there"), "tab\\there");
+    }
+
+    #[test]
+    fn test_generate_yaml_format() {
+        let rows = vec![
+            Row::with_spans(1, vec![
+                Span::new("s1", "Hello", 1, 1, 5).with_bold(true),
+            ]),
+        ];
+
+        let yaml = generate_yaml(&rows);
+
+        assert!(yaml.contains("- row 1:"));
+        assert!(yaml.contains("span \"Hello\""));
+        assert!(yaml.contains("[bold]"));
+        assert!(yaml.contains("[ref=s1]"));
+        assert!(yaml.contains("(1,1)"));
     }
 }
