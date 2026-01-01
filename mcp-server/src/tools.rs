@@ -124,3 +124,25 @@ pub struct SuccessResult {
     /// Whether the operation succeeded
     pub success: bool,
 }
+
+/// Result of getting an accessibility-style snapshot
+#[derive(Debug, Serialize)]
+pub struct SnapshotResult {
+    /// YAML representation of the snapshot
+    pub yaml: String,
+    /// Number of spans in the snapshot
+    pub span_count: usize,
+}
+
+/// Result of taking a screenshot
+#[derive(Debug, Serialize)]
+pub struct ScreenshotResult {
+    /// Base64-encoded PNG image data
+    pub data: String,
+    /// Image format (always "png")
+    pub format: String,
+    /// Image width in pixels
+    pub width: u32,
+    /// Image height in pixels
+    pub height: u32,
+}

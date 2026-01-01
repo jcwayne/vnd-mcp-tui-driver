@@ -16,8 +16,9 @@ use tracing::{debug, error, info};
 use tui_driver::{Key, LaunchOptions, TuiDriver};
 
 use crate::tools::{
-    CloseResult, LaunchParams, LaunchResult, PressKeyParams, PressKeysParams, SendTextParams,
-    SessionParams, SuccessResult, TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
+    CloseResult, LaunchParams, LaunchResult, PressKeyParams, PressKeysParams, ScreenshotResult,
+    SendTextParams, SessionParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
+    WaitForTextParams, WaitResult,
 };
 
 /// JSON-RPC 2.0 request
@@ -314,6 +315,34 @@ impl McpServer {
                         },
                         "required": ["session_id"]
                     }
+                },
+                {
+                    "name": "tui_snapshot",
+                    "description": "Get accessibility-style snapshot with element references",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier"
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
+                },
+                {
+                    "name": "tui_screenshot",
+                    "description": "Take a PNG screenshot of the terminal",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier"
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
                 }
             ]
         });
@@ -337,6 +366,8 @@ impl McpServer {
             "tui_send_text" => self.tool_send_text(id, arguments).await,
             "tui_wait_for_text" => self.tool_wait_for_text(id, arguments).await,
             "tui_wait_for_idle" => self.tool_wait_for_idle(id, arguments).await,
+            "tui_snapshot" => self.tool_snapshot(id, arguments).await,
+            "tui_screenshot" => self.tool_screenshot(id, arguments).await,
             _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -755,6 +786,93 @@ impl McpServer {
                         JsonRpcResponse::success(id, content)
                     }
                 }
+            }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_snapshot tool
+    async fn tool_snapshot(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: SessionParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let snapshot = driver.snapshot();
+                let yaml = snapshot.yaml.clone().unwrap_or_default();
+                let span_count = snapshot.span_count();
+
+                let result = SnapshotResult { yaml, span_count };
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap()
+                        }
+                    ]
+                });
+                JsonRpcResponse::success(id, content)
+            }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_screenshot tool
+    async fn tool_screenshot(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: SessionParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let screenshot = driver.screenshot();
+
+                let result = ScreenshotResult {
+                    data: screenshot.data,
+                    format: screenshot.format,
+                    width: screenshot.width,
+                    height: screenshot.height,
+                };
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap()
+                        }
+                    ]
+                });
+                JsonRpcResponse::success(id, content)
             }
             None => {
                 let content = json!({
