@@ -124,3 +124,50 @@ async fn test_key_parse() {
     // Invalid key
     assert!(Key::parse("invalid_key_name").is_err());
 }
+
+#[tokio::test]
+async fn test_snapshot() {
+    let options = LaunchOptions::new("bash")
+        .args(vec!["--norc".to_string(), "--noprofile".to_string()]);
+
+    let driver = TuiDriver::launch(options).await.expect("Failed to launch");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Type something to appear in snapshot
+    driver.send_text("echo SNAPSHOT_TEST\n").expect("send failed");
+    driver.wait_for_text("SNAPSHOT_TEST", 2000).await.expect("wait failed");
+
+    let snapshot = driver.snapshot();
+
+    // Should have spans
+    assert!(!snapshot.spans.is_empty(), "Expected spans in snapshot");
+
+    // Should have YAML
+    assert!(snapshot.yaml.is_some(), "Expected YAML output");
+    let yaml = snapshot.yaml.as_ref().unwrap();
+    assert!(!yaml.is_empty(), "Expected non-empty YAML");
+
+    // Should find our text
+    let found = snapshot.get_first_by_text("SNAPSHOT_TEST");
+    assert!(found.is_some(), "Expected to find SNAPSHOT_TEST span");
+
+    driver.send_text("exit\n").ok();
+    driver.close().await.ok();
+}
+
+#[tokio::test]
+async fn test_screenshot() {
+    let options = LaunchOptions::new("echo").args(vec!["Screenshot test".to_string()]);
+
+    let driver = TuiDriver::launch(options).await.expect("Failed to launch");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let screenshot = driver.screenshot();
+
+    assert_eq!(screenshot.format, "png");
+    assert!(screenshot.width > 0);
+    assert!(screenshot.height > 0);
+    assert!(!screenshot.data.is_empty(), "Expected base64 data");
+
+    driver.close().await.ok();
+}
