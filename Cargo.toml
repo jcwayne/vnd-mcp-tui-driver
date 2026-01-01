@@ -1,0 +1,3 @@
+[workspace]
+members = ["tui-driver", "mcp-server"]
+resolver = "2"

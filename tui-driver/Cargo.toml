@@ -1,0 +1,18 @@
+[package]
+name = "tui-driver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+portable-pty = "0.8"
+vt100 = "0.15"
+tokio = { version = "1", features = ["full", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+
+[dev-dependencies]
+tokio-test = "0.4"

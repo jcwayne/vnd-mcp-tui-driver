@@ -1,0 +1,18 @@
+[package]
+name = "mcp-tui-driver"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mcp-tui-driver"
+path = "src/main.rs"
+
+[dependencies]
+tui-driver = { path = "../tui-driver" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full", "io-std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+async-trait = "0.1"
