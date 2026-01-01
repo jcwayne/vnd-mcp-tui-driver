@@ -6,10 +6,21 @@ use crate::mouse::{mouse_click, mouse_double_click, MouseButton};
 use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Information about a TUI session
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub command: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub running: bool,
+}
 
 /// Signals that can be sent to the process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +80,9 @@ impl LaunchOptions {
 pub struct TuiDriver {
     /// Session identifier
     session_id: String,
+
+    /// Command that was launched
+    command: String,
 
     /// PTY master for resize operations
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -187,6 +201,7 @@ impl TuiDriver {
 
         Ok(Self {
             session_id,
+            command: options.command.clone(),
             master: Mutex::new(pty_pair.master),
             master_writer: Mutex::new(master_writer),
             child: Mutex::new(child),
@@ -215,6 +230,17 @@ impl TuiDriver {
             self.cols.load(Ordering::SeqCst),
             self.rows.load(Ordering::SeqCst),
         )
+    }
+
+    /// Get session information
+    pub fn info(&self) -> SessionInfo {
+        SessionInfo {
+            session_id: self.session_id.clone(),
+            command: self.command.clone(),
+            cols: self.cols.load(Ordering::SeqCst),
+            rows: self.rows.load(Ordering::SeqCst),
+            running: self.is_running(),
+        }
     }
 
     /// Get plain text snapshot of current screen
