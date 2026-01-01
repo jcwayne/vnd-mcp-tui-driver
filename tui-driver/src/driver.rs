@@ -7,10 +7,73 @@ use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Default capacity for debug buffers (characters)
+const BUFFER_CAPACITY: usize = 10000;
+
+/// Default scrollback lines for vt100 parser
+const SCROLLBACK_LINES: usize = 500;
+
+/// Ring buffer for storing last N characters of I/O
+#[derive(Debug)]
+pub struct RingBuffer {
+    data: Mutex<VecDeque<char>>,
+    capacity: usize,
+}
+
+impl RingBuffer {
+    /// Create a new ring buffer with the specified capacity
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            data: Mutex::new(VecDeque::with_capacity(capacity)),
+            capacity,
+        }
+    }
+
+    /// Push a string to the buffer, evicting old chars if needed
+    pub fn push_str(&self, s: &str) {
+        let mut data = self.data.lock();
+        for c in s.chars() {
+            if data.len() >= self.capacity {
+                data.pop_front();
+            }
+            data.push_back(c);
+        }
+    }
+
+    /// Get the last N characters from the buffer
+    pub fn get_last(&self, n: usize) -> String {
+        let data = self.data.lock();
+        let skip = data.len().saturating_sub(n);
+        data.iter().skip(skip).collect()
+    }
+
+    /// Get all characters in the buffer
+    pub fn get_all(&self) -> String {
+        let data = self.data.lock();
+        data.iter().collect()
+    }
+
+    /// Get the current number of characters in the buffer
+    pub fn len(&self) -> usize {
+        self.data.lock().len()
+    }
+
+    /// Check if the buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.data.lock().is_empty()
+    }
+
+    /// Clear the buffer
+    pub fn clear(&self) {
+        self.data.lock().clear();
+    }
+}
 
 /// Information about a TUI session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +172,12 @@ pub struct TuiDriver {
 
     /// Handle to the background reader thread
     _reader_handle: Option<std::thread::JoinHandle<()>>,
+
+    /// Debug buffer: raw input sent to process (escape sequences)
+    input_buffer: Arc<RingBuffer>,
+
+    /// Debug buffer: raw PTY output (escape sequences included)
+    output_buffer: Arc<RingBuffer>,
 }
 
 impl TuiDriver {
@@ -156,20 +225,25 @@ impl TuiDriver {
             .take_writer()
             .map_err(|e| TuiError::PtyError(e.to_string()))?;
 
-        // Initialize parser
+        // Initialize parser with scrollback
         let parser = Arc::new(Mutex::new(vt100::Parser::new(
             options.rows,
             options.cols,
-            0,
+            SCROLLBACK_LINES,
         )));
         let last_update = Arc::new(AtomicU64::new(current_timestamp_ms()));
         let running = Arc::new(AtomicBool::new(true));
+
+        // Initialize debug buffers
+        let input_buffer = Arc::new(RingBuffer::new(BUFFER_CAPACITY));
+        let output_buffer = Arc::new(RingBuffer::new(BUFFER_CAPACITY));
 
         // Spawn background reader thread (not tokio task - PTY read is blocking)
         let reader_thread = {
             let parser = Arc::clone(&parser);
             let last_update = Arc::clone(&last_update);
             let running = Arc::clone(&running);
+            let output_buffer = Arc::clone(&output_buffer);
 
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
@@ -183,6 +257,10 @@ impl TuiDriver {
                             break;
                         }
                         Ok(n) => {
+                            // Store raw output in debug buffer
+                            let text = String::from_utf8_lossy(&buf[..n]);
+                            output_buffer.push_str(&text);
+
                             // Feed bytes to parser
                             let mut parser = parser.lock();
                             parser.process(&buf[..n]);
@@ -211,6 +289,8 @@ impl TuiDriver {
             cols: AtomicU16::new(options.cols),
             rows: AtomicU16::new(options.rows),
             _reader_handle: Some(reader_thread),
+            input_buffer,
+            output_buffer,
         })
     }
 
@@ -291,6 +371,9 @@ impl TuiDriver {
             return Err(TuiError::SessionClosed);
         }
 
+        // Record to input buffer
+        self.input_buffer.push_str(text);
+
         let mut writer = self.master_writer.lock();
         writer.write_all(text.as_bytes())?;
         writer.flush()?;
@@ -304,6 +387,11 @@ impl TuiDriver {
         }
 
         let bytes = key.to_escape_sequence();
+
+        // Record raw escape sequence to input buffer
+        let text = String::from_utf8_lossy(&bytes);
+        self.input_buffer.push_str(&text);
+
         let mut writer = self.master_writer.lock();
         writer.write_all(&bytes)?;
         writer.flush()?;
@@ -319,6 +407,11 @@ impl TuiDriver {
         let mut writer = self.master_writer.lock();
         for key in keys {
             let bytes = key.to_escape_sequence();
+
+            // Record raw escape sequence to input buffer
+            let text = String::from_utf8_lossy(&bytes);
+            self.input_buffer.push_str(&text);
+
             writer.write_all(&bytes)?;
         }
         writer.flush()?;
@@ -514,6 +607,31 @@ impl TuiDriver {
             .get_by_ref(ref_id)
             .ok_or_else(|| TuiError::RefNotFound(ref_id.to_string()))?;
         self.right_click_at(span.x, span.y)
+    }
+
+    /// Get last N characters from input buffer (raw escape sequences sent to process)
+    pub fn get_input_buffer(&self, n: usize) -> String {
+        self.input_buffer.get_last(n)
+    }
+
+    /// Get last N characters from output buffer (raw PTY output)
+    pub fn get_output_buffer(&self, n: usize) -> String {
+        self.output_buffer.get_last(n)
+    }
+
+    /// Get scrollback line count (number of lines that have scrolled off screen)
+    ///
+    /// Note: vt100's public API doesn't expose individual scrollback cells.
+    /// Use get_output_buffer() for raw output history including scrollback content.
+    pub fn get_scrollback(&self) -> usize {
+        let parser = self.parser.lock();
+        parser.screen().scrollback()
+    }
+
+    /// Clear all debug buffers
+    pub fn clear_buffers(&self) {
+        self.input_buffer.clear();
+        self.output_buffer.clear();
     }
 }
 

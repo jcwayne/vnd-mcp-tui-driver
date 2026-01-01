@@ -17,10 +17,11 @@ use tracing::{debug, error, info};
 use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
 
 use crate::tools::{
-    ClickAtParams, ClickParams, CloseResult, LaunchParams, LaunchResult, ListSessionsResult,
-    PressKeyParams, PressKeysParams, ResizeParams, RunCodeParams, RunCodeResult, ScreenshotResult,
-    SendTextParams, SessionInfoResult, SessionParams, SignalParams, SnapshotResult, SuccessResult,
-    TextResult, WaitForIdleParams, WaitForTextParams, WaitResult,
+    BufferResult, ClickAtParams, ClickParams, CloseResult, GetInputParams, GetOutputParams,
+    LaunchParams, LaunchResult, ListSessionsResult, PressKeyParams, PressKeysParams, ResizeParams,
+    RunCodeParams, RunCodeResult, ScreenshotResult, ScrollbackResult, SendTextParams,
+    SessionInfoResult, SessionParams, SignalParams, SnapshotResult, SuccessResult, TextResult,
+    WaitForIdleParams, WaitForTextParams, WaitResult,
 };
 
 /// JSON-RPC 2.0 request
@@ -506,6 +507,58 @@ impl McpServer {
                         },
                         "required": ["session_id"]
                     }
+                },
+                {
+                    "name": "tui_get_input",
+                    "description": "Get raw input sent to the process (escape sequences included). Useful for debugging what was sent to the terminal.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "chars": {
+                                "type": "integer",
+                                "description": "Maximum characters to return",
+                                "default": 10000
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
+                },
+                {
+                    "name": "tui_get_output",
+                    "description": "Get raw PTY output (escape sequences included). Useful for debugging terminal output.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            },
+                            "chars": {
+                                "type": "integer",
+                                "description": "Maximum characters to return",
+                                "default": 10000
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
+                },
+                {
+                    "name": "tui_get_scrollback",
+                    "description": "Get the number of lines that have scrolled off the visible screen.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Session identifier returned by tui_launch"
+                            }
+                        },
+                        "required": ["session_id"]
+                    }
                 }
             ]
         });
@@ -540,6 +593,9 @@ impl McpServer {
             "tui_send_signal" => self.tool_send_signal(id, arguments).await,
             "tui_list_sessions" => self.tool_list_sessions(id).await,
             "tui_get_session" => self.tool_get_session(id, arguments).await,
+            "tui_get_input" => self.tool_get_input(id, arguments).await,
+            "tui_get_output" => self.tool_get_output(id, arguments).await,
+            "tui_get_scrollback" => self.tool_get_scrollback(id, arguments).await,
             _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {}", tool_name)),
         }
     }
@@ -1485,6 +1541,129 @@ impl McpServer {
                     rows: info.rows,
                     running: info.running,
                 };
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap()
+                        }
+                    ]
+                });
+                JsonRpcResponse::success(id, content)
+            }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_get_input tool
+    async fn tool_get_input(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: GetInputParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let content = driver.get_input_buffer(params.chars);
+                let result = BufferResult {
+                    length: content.len(),
+                    content,
+                };
+                let response_content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap()
+                        }
+                    ]
+                });
+                JsonRpcResponse::success(id, response_content)
+            }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_get_output tool
+    async fn tool_get_output(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: GetOutputParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let content = driver.get_output_buffer(params.chars);
+                let result = BufferResult {
+                    length: content.len(),
+                    content,
+                };
+                let response_content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap()
+                        }
+                    ]
+                });
+                JsonRpcResponse::success(id, response_content)
+            }
+            None => {
+                let content = json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Session not found: {}", params.session_id)
+                        }
+                    ],
+                    "isError": true
+                });
+                JsonRpcResponse::success(id, content)
+            }
+        }
+    }
+
+    /// Handle tui_get_scrollback tool
+    async fn tool_get_scrollback(&self, id: Value, arguments: Value) -> JsonRpcResponse {
+        let params: SessionParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(id, -32602, format!("Invalid parameters: {}", e));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let lines = driver.get_scrollback();
+                let result = ScrollbackResult { lines };
                 let content = json!({
                     "content": [
                         {

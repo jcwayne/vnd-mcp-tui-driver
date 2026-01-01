@@ -224,3 +224,43 @@ pub struct SessionInfoResult {
     /// Whether the process is still running
     pub running: bool,
 }
+
+/// Parameters for getting input buffer (raw escape sequences sent to process)
+#[derive(Debug, Deserialize)]
+pub struct GetInputParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Maximum characters to return (default: 10000)
+    #[serde(default = "default_buffer_chars")]
+    pub chars: usize,
+}
+
+/// Parameters for getting output buffer (raw PTY output)
+#[derive(Debug, Deserialize)]
+pub struct GetOutputParams {
+    /// Session identifier returned by tui_launch
+    pub session_id: String,
+    /// Maximum characters to return (default: 10000)
+    #[serde(default = "default_buffer_chars")]
+    pub chars: usize,
+}
+
+fn default_buffer_chars() -> usize {
+    10000
+}
+
+/// Result of getting a debug buffer
+#[derive(Debug, Serialize)]
+pub struct BufferResult {
+    /// Buffer content
+    pub content: String,
+    /// Number of characters in the result
+    pub length: usize,
+}
+
+/// Result of getting scrollback info
+#[derive(Debug, Serialize)]
+pub struct ScrollbackResult {
+    /// Number of lines that have scrolled off screen
+    pub lines: usize,
+}
