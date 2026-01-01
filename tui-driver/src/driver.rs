@@ -2,12 +2,11 @@
 
 use crate::error::{Result, TuiError};
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Configuration for launching a TUI session
 #[derive(Debug, Clone)]
@@ -77,8 +76,8 @@ pub struct TuiDriver {
     cols: u16,
     rows: u16,
 
-    /// Handle to stop the background reader task
-    _reader_handle: tokio::task::JoinHandle<()>,
+    /// Handle to the background reader thread
+    _reader_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl TuiDriver {
@@ -128,17 +127,40 @@ impl TuiDriver {
 
         // Initialize parser
         let parser = Arc::new(Mutex::new(vt100::Parser::new(options.rows, options.cols, 0)));
-        let last_update = Arc::new(AtomicU64::new(0));
+        let last_update = Arc::new(AtomicU64::new(current_timestamp_ms()));
         let running = Arc::new(AtomicBool::new(true));
 
-        // Spawn background reader task
-        let reader_handle = {
+        // Spawn background reader thread (not tokio task - PTY read is blocking)
+        let reader_thread = {
             let parser = Arc::clone(&parser);
             let last_update = Arc::clone(&last_update);
             let running = Arc::clone(&running);
 
-            tokio::spawn(async move {
-                Self::reader_task(master_reader, parser, last_update, running).await;
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                let mut master_reader = master_reader;
+
+                while running.load(Ordering::SeqCst) {
+                    match master_reader.read(&mut buf) {
+                        Ok(0) => {
+                            // EOF - process exited
+                            running.store(false, Ordering::SeqCst);
+                            break;
+                        }
+                        Ok(n) => {
+                            // Feed bytes to parser
+                            let mut parser = parser.lock();
+                            parser.process(&buf[..n]);
+                            last_update.store(current_timestamp_ms(), Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            if e.kind() != std::io::ErrorKind::WouldBlock {
+                                running.store(false, Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                    }
+                }
             })
         };
 
@@ -151,27 +173,8 @@ impl TuiDriver {
             running,
             cols: options.cols,
             rows: options.rows,
-            _reader_handle: reader_handle,
+            _reader_handle: Some(reader_thread),
         })
-    }
-
-    /// Background task that reads from PTY and updates parser
-    async fn reader_task(
-        mut reader: Box<dyn Read + Send>,
-        parser: Arc<Mutex<vt100::Parser>>,
-        last_update: Arc<AtomicU64>,
-        running: Arc<AtomicBool>,
-    ) {
-        let mut buf = [0u8; 4096];
-
-        loop {
-            // For now, just check if still running
-            if !running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
     }
 
     /// Get session ID
@@ -217,6 +220,57 @@ impl TuiDriver {
         result
     }
 
+    /// Send text to the terminal
+    pub fn send_text(&self, text: &str) -> Result<()> {
+        if !self.is_running() {
+            return Err(TuiError::SessionClosed);
+        }
+
+        let mut writer = self.master_writer.lock();
+        writer.write_all(text.as_bytes())?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Wait for screen to settle (no updates for specified duration)
+    pub async fn wait_for_idle(&self, idle_ms: u64, timeout_ms: u64) -> Result<()> {
+        let start = tokio::time::Instant::now();
+        let timeout = Duration::from_millis(timeout_ms);
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(TuiError::Timeout);
+            }
+
+            let last = self.last_update.load(Ordering::SeqCst);
+            let now = current_timestamp_ms();
+
+            if now - last >= idle_ms {
+                return Ok(());
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Wait for specific text to appear on screen
+    pub async fn wait_for_text(&self, text: &str, timeout_ms: u64) -> Result<bool> {
+        let start = tokio::time::Instant::now();
+        let timeout = Duration::from_millis(timeout_ms);
+
+        loop {
+            if self.text().contains(text) {
+                return Ok(true);
+            }
+
+            if start.elapsed() > timeout {
+                return Ok(false);
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// Close the session
     pub async fn close(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
@@ -227,4 +281,12 @@ impl TuiDriver {
 
         Ok(())
     }
+}
+
+/// Get current timestamp in milliseconds
+fn current_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
