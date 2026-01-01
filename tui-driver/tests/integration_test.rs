@@ -179,8 +179,8 @@ async fn test_screenshot() {
 
 #[tokio::test]
 async fn test_click_at() {
-    let options = LaunchOptions::new("bash")
-        .args(vec!["--norc".to_string(), "--noprofile".to_string()]);
+    let options =
+        LaunchOptions::new("bash").args(vec!["--norc".to_string(), "--noprofile".to_string()]);
 
     let driver = TuiDriver::launch(options).await.expect("Failed to launch");
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
