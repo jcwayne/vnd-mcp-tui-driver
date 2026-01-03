@@ -71,11 +71,12 @@ pub struct SessionState {
 }
 
 // SAFETY: SessionState contains a `boa_engine::Context` which is `!Send + !Sync`.
-// However, all access to SessionState is serialized through a tokio::sync::Mutex,
-// ensuring that:
-// - Only one thread can access the SessionState at a time
-// - The JS context is never accessed concurrently
-// - All async operations properly await the mutex lock before accessing
+// This is safe because:
+// 1. All access to SessionState is serialized through tokio::sync::Mutex
+// 2. The JS context is only accessed in tui_run_code, which executes synchronously
+// 3. While some handlers await while holding the lock (wait_for_text, wait_for_idle, close),
+//    they only access the driver field, never the js_context
+// 4. No concurrent access to the JS context is possible due to mutex serialization
 unsafe impl Send for SessionState {}
 unsafe impl Sync for SessionState {}
 
