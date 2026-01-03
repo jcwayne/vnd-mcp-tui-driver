@@ -194,6 +194,95 @@ fn load_closed_session(session_id: &str) -> Option<ClosedSessionData> {
     }
 }
 
+// =========================================================================
+// TypeScript Interface Generation
+// =========================================================================
+
+/// Generate TypeScript interface definitions for the tui_run_code JavaScript API.
+///
+/// This provides LLMs with type information before using tui_run_code,
+/// helping them understand the available methods and their signatures.
+fn generate_typescript_interface() -> String {
+    r#"// TypeScript interface for tui_run_code JavaScript API
+
+interface Tui {
+  // Display
+  text(): string;
+  snapshot(): Snapshot;
+  screenshot(filename?: string): string;  // Returns file path
+
+  // Input
+  sendText(text: string): void;
+  pressKey(key: string): void;
+  pressKeys(keys: string[]): void;
+
+  // Mouse
+  click(ref: string): void;
+  clickAt(x: number, y: number): void;
+  doubleClick(ref: string): void;
+  rightClick(ref: string): void;
+  hover(ref: string): void;
+  drag(startRef: string, endRef: string): void;
+
+  // Wait
+  waitForText(text: string, timeoutMs?: number): boolean;
+  waitForIdle(timeoutMs?: number, idleMs?: number): boolean;
+
+  // Control
+  resize(cols: number, rows: number): void;
+  sendSignal(signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | "SIGQUIT"): void;
+
+  // Debug
+  getScrollback(): number;
+  getInput(chars?: number): string;
+  getOutput(chars?: number): string;
+}
+
+interface Snapshot {
+  rows: Row[];
+  spans: Span[];
+  span_count: number;
+}
+
+interface Row {
+  row_number: number;
+  spans: Span[];
+}
+
+interface Span {
+  ref: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  inverse?: boolean;
+  strikethrough?: boolean;
+  underline_style?: "single" | "double" | "curly" | "dotted" | "dashed";
+  blink?: "slow" | "rapid";
+  fg?: string;
+  bg?: string;
+  link?: string;
+  image?: string;
+  image_size?: string;
+}
+
+interface Console {
+  log(...args: any[]): void;
+  info(...args: any[]): void;
+  warn(...args: any[]): void;
+  error(...args: any[]): void;
+  debug(...args: any[]): void;
+}
+
+declare const tui: Tui;
+declare const console: Console;
+"#
+    .to_string()
+}
+
 /// TUI MCP Server
 ///
 /// This struct implements the MCP server for TUI automation.
@@ -781,8 +870,17 @@ impl TuiServer {
     }
 
     // =========================================================================
-    // Script Tool
+    // Script Tools
     // =========================================================================
+
+    /// Get TypeScript interface definitions for tui_run_code
+    #[tool(
+        description = "Get TypeScript interface definitions for tui_run_code. Call this before using tui_run_code to understand the available API."
+    )]
+    async fn tui_get_code_interface(&self) -> Result<CallToolResult, McpError> {
+        let interface = generate_typescript_interface();
+        Ok(CallToolResult::success(vec![Content::text(interface)]))
+    }
 
     /// Execute JavaScript code with tui object for complex automation
     #[tool(
