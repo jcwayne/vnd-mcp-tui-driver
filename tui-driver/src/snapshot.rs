@@ -56,6 +56,30 @@ pub struct Span {
     /// Background color (e.g., "blue", "#0000ff", or ANSI color number).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg: Option<String>,
+
+    /// Extended underline style: single, double, curly, dotted, dashed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub underline_style: Option<String>,
+
+    /// Strikethrough text
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strikethrough: Option<bool>,
+
+    /// Blink style: slow, rapid
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blink: Option<String>,
+
+    /// Hyperlink URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+
+    /// Image reference ID (for image placeholders)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+
+    /// Image size in cells (WxH format)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
 }
 
 impl Span {
@@ -79,6 +103,12 @@ impl Span {
             inverse: None,
             fg: None,
             bg: None,
+            underline_style: None,
+            strikethrough: None,
+            blink: None,
+            link: None,
+            image: None,
+            image_size: None,
         }
     }
 
@@ -115,6 +145,37 @@ impl Span {
     /// Sets the background color.
     pub fn with_bg(mut self, bg: impl Into<String>) -> Self {
         self.bg = Some(bg.into());
+        self
+    }
+
+    /// Sets the strikethrough attribute.
+    pub fn with_strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = Some(strikethrough);
+        self
+    }
+
+    /// Sets the blink style (slow or rapid).
+    pub fn with_blink(mut self, blink: impl Into<String>) -> Self {
+        self.blink = Some(blink.into());
+        self
+    }
+
+    /// Sets the extended underline style.
+    pub fn with_underline_style(mut self, style: impl Into<String>) -> Self {
+        self.underline_style = Some(style.into());
+        self
+    }
+
+    /// Sets the hyperlink URL.
+    pub fn with_link(mut self, url: impl Into<String>) -> Self {
+        self.link = Some(url.into());
+        self
+    }
+
+    /// Sets the image reference and size.
+    pub fn with_image(mut self, image_ref: impl Into<String>, size: impl Into<String>) -> Self {
+        self.image = Some(image_ref.into());
+        self.image_size = Some(size.into());
         self
     }
 }
@@ -1176,5 +1237,19 @@ mod tests {
         assert!(snapshot.is_empty());
         assert_eq!(snapshot.row_count(), 0);
         assert_eq!(snapshot.span_count(), 0);
+    }
+
+    #[test]
+    fn test_extended_span_attributes() {
+        let span = Span::new("s1", "test", 1, 1, 4)
+            .with_strikethrough(true)
+            .with_blink("slow".to_string())
+            .with_underline_style("curly".to_string())
+            .with_link("https://example.com".to_string());
+
+        assert_eq!(span.strikethrough, Some(true));
+        assert_eq!(span.blink, Some("slow".to_string()));
+        assert_eq!(span.underline_style, Some("curly".to_string()));
+        assert_eq!(span.link, Some("https://example.com".to_string()));
     }
 }
