@@ -9,16 +9,41 @@ use boa_engine::{
     property::Attribute,
     Context, JsArgs, JsResult, JsString, JsValue, Source,
 };
-use tui_driver::{snapshot::Snapshot, Key, Row, Span, TuiDriver};
+use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
 
 /// Execute a JavaScript script with access to TUI automation functions.
 ///
 /// The script has access to a global `tui` object with the following methods:
+///
+/// Text/Input:
 /// - `tui.text()` - Returns the current screen text
 /// - `tui.sendText(text)` - Sends text to the terminal
 /// - `tui.pressKey(key)` - Presses a key (e.g., "Enter", "Ctrl+c")
+/// - `tui.pressKeys(keys)` - Presses multiple keys in sequence
+///
+/// Mouse:
 /// - `tui.clickAt(x, y)` - Clicks at the specified coordinates
+/// - `tui.click(ref)` - Clicks on element by reference ID
+/// - `tui.doubleClick(ref)` - Double-clicks on element by reference ID
+/// - `tui.rightClick(ref)` - Right-clicks on element by reference ID
+/// - `tui.hover(ref)` - Hovers over element by reference ID
+/// - `tui.drag(startRef, endRef)` - Drags from one element to another
+///
+/// Wait:
+/// - `tui.waitForText(text, timeoutMs?)` - Waits for text to appear, returns boolean
+/// - `tui.waitForIdle(timeoutMs?, idleMs?)` - Waits for screen to settle, returns boolean
+///
+/// Snapshot:
 /// - `tui.snapshot()` - Returns an accessibility snapshot as a JavaScript object
+///
+/// Control:
+/// - `tui.resize(cols, rows)` - Resizes the terminal
+/// - `tui.sendSignal(signal)` - Sends a signal (SIGINT, SIGTERM, etc.)
+///
+/// Debug:
+/// - `tui.getScrollback()` - Returns number of lines scrolled off screen
+/// - `tui.getInput(chars?)` - Returns raw input buffer (escape sequences sent to process)
+/// - `tui.getOutput(chars?)` - Returns raw output buffer (PTY output)
 ///
 /// # Arguments
 ///
@@ -73,25 +98,65 @@ fn create_tui_object(context: &mut Context, driver_ptr: *const TuiDriver) -> JsR
     // Create an empty object for tui
     let tui_obj = boa_engine::JsObject::with_null_proto();
 
-    // Add tui.text() method
+    // Text/Input methods
     let text_fn = create_text_method(context, driver_ptr);
     tui_obj.set(js_string!("text"), text_fn, false, context)?;
 
-    // Add tui.sendText(text) method
     let send_text_fn = create_send_text_method(context, driver_ptr);
     tui_obj.set(js_string!("sendText"), send_text_fn, false, context)?;
 
-    // Add tui.pressKey(key) method
     let press_key_fn = create_press_key_method(context, driver_ptr);
     tui_obj.set(js_string!("pressKey"), press_key_fn, false, context)?;
 
-    // Add tui.clickAt(x, y) method
+    let press_keys_fn = create_press_keys_method(context, driver_ptr);
+    tui_obj.set(js_string!("pressKeys"), press_keys_fn, false, context)?;
+
+    // Mouse methods
     let click_at_fn = create_click_at_method(context, driver_ptr);
     tui_obj.set(js_string!("clickAt"), click_at_fn, false, context)?;
 
-    // Add tui.snapshot() method
+    let click_fn = create_click_method(context, driver_ptr);
+    tui_obj.set(js_string!("click"), click_fn, false, context)?;
+
+    let double_click_fn = create_double_click_method(context, driver_ptr);
+    tui_obj.set(js_string!("doubleClick"), double_click_fn, false, context)?;
+
+    let right_click_fn = create_right_click_method(context, driver_ptr);
+    tui_obj.set(js_string!("rightClick"), right_click_fn, false, context)?;
+
+    let hover_fn = create_hover_method(context, driver_ptr);
+    tui_obj.set(js_string!("hover"), hover_fn, false, context)?;
+
+    let drag_fn = create_drag_method(context, driver_ptr);
+    tui_obj.set(js_string!("drag"), drag_fn, false, context)?;
+
+    // Wait methods
+    let wait_for_text_fn = create_wait_for_text_method(context, driver_ptr);
+    tui_obj.set(js_string!("waitForText"), wait_for_text_fn, false, context)?;
+
+    let wait_for_idle_fn = create_wait_for_idle_method(context, driver_ptr);
+    tui_obj.set(js_string!("waitForIdle"), wait_for_idle_fn, false, context)?;
+
+    // Snapshot method
     let snapshot_fn = create_snapshot_method(context, driver_ptr);
     tui_obj.set(js_string!("snapshot"), snapshot_fn, false, context)?;
+
+    // Control methods
+    let resize_fn = create_resize_method(context, driver_ptr);
+    tui_obj.set(js_string!("resize"), resize_fn, false, context)?;
+
+    let send_signal_fn = create_send_signal_method(context, driver_ptr);
+    tui_obj.set(js_string!("sendSignal"), send_signal_fn, false, context)?;
+
+    // Debug methods
+    let get_scrollback_fn = create_get_scrollback_method(context, driver_ptr);
+    tui_obj.set(js_string!("getScrollback"), get_scrollback_fn, false, context)?;
+
+    let get_input_fn = create_get_input_method(context, driver_ptr);
+    tui_obj.set(js_string!("getInput"), get_input_fn, false, context)?;
+
+    let get_output_fn = create_get_output_method(context, driver_ptr);
+    tui_obj.set(js_string!("getOutput"), get_output_fn, false, context)?;
 
     Ok(tui_obj.into())
 }
@@ -407,6 +472,409 @@ fn create_snapshot_method(context: &mut Context, driver_ptr: *const TuiDriver) -
         }),
     )
     .name(js_string!("snapshot"))
+    .length(0)
+    .build()
+    .into()
+}
+
+/// Create the tui.pressKeys(keys) method for pressing multiple keys in sequence.
+fn create_press_keys_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            // Get the keys array argument
+            let keys_arg = args.get_or_undefined(0);
+            let keys_obj = keys_arg.as_object().ok_or_else(|| {
+                boa_engine::JsError::from_opaque(JsValue::from(JsString::from(
+                    "pressKeys requires an array of key strings",
+                )))
+            })?;
+
+            // Get length of array
+            let length_val = keys_obj.get(js_string!("length"), ctx)?;
+            let length = length_val.to_u32(ctx)? as usize;
+
+            // Parse all keys first
+            let mut keys = Vec::with_capacity(length);
+            for i in 0..length {
+                let key_val = keys_obj.get(i as u32, ctx)?;
+                let key_str = key_val.to_string(ctx)?.to_std_string_escaped();
+                let key = Key::parse(&key_str).map_err(|e| {
+                    boa_engine::JsError::from_opaque(JsValue::from(JsString::from(
+                        format!("Invalid key '{}': {}", key_str, e).as_str(),
+                    )))
+                })?;
+                keys.push(key);
+            }
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.press_keys(&keys) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("pressKeys error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("pressKeys"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.click(ref) method for clicking by reference ID.
+fn create_click_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let ref_id = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.click(&ref_id) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("click error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("click"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.doubleClick(ref) method for double-clicking by reference ID.
+fn create_double_click_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let ref_id = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.double_click(&ref_id) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("doubleClick error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("doubleClick"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.rightClick(ref) method for right-clicking by reference ID.
+fn create_right_click_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let ref_id = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.right_click(&ref_id) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("rightClick error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("rightClick"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.hover(ref) method for hovering over an element by reference ID.
+fn create_hover_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let ref_id = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.hover(&ref_id) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("hover error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("hover"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.drag(startRef, endRef) method for dragging between elements.
+fn create_drag_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let start_ref = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+            let end_ref = args
+                .get_or_undefined(1)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.drag(&start_ref, &end_ref) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("drag error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("drag"))
+    .length(2)
+    .build()
+    .into()
+}
+
+/// Create the tui.waitForText(text, timeoutMs?) method.
+/// Blocks until text appears or timeout. Returns boolean.
+fn create_wait_for_text_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let text = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+            let timeout_ms = if args.get_or_undefined(1).is_undefined() {
+                5000 // default timeout
+            } else {
+                args.get_or_undefined(1).to_u32(ctx)? as u64
+            };
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            // Block on the async wait_for_text method
+            let result = futures::executor::block_on(driver.wait_for_text(&text, timeout_ms));
+
+            match result {
+                Ok(found) => Ok(JsValue::from(found)),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("waitForText error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("waitForText"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.waitForIdle(timeoutMs?, idleMs?) method.
+/// Blocks until screen stops changing. Returns boolean.
+fn create_wait_for_idle_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let timeout_ms = if args.get_or_undefined(0).is_undefined() {
+                5000 // default timeout
+            } else {
+                args.get_or_undefined(0).to_u32(ctx)? as u64
+            };
+            let idle_ms = if args.get_or_undefined(1).is_undefined() {
+                100 // default idle time
+            } else {
+                args.get_or_undefined(1).to_u32(ctx)? as u64
+            };
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            // Block on the async wait_for_idle method
+            let result = futures::executor::block_on(driver.wait_for_idle(idle_ms, timeout_ms));
+
+            match result {
+                Ok(()) => Ok(JsValue::from(true)),
+                Err(_) => Ok(JsValue::from(false)), // Timeout returns false
+            }
+        }),
+    )
+    .name(js_string!("waitForIdle"))
+    .length(0)
+    .build()
+    .into()
+}
+
+/// Create the tui.resize(cols, rows) method for resizing the terminal.
+fn create_resize_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let cols = args.get_or_undefined(0).to_u32(ctx)? as u16;
+            let rows = args.get_or_undefined(1).to_u32(ctx)? as u16;
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.resize(cols, rows) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("resize error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("resize"))
+    .length(2)
+    .build()
+    .into()
+}
+
+/// Create the tui.sendSignal(signal) method for sending signals to the process.
+fn create_send_signal_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let signal_str = args
+                .get_or_undefined(0)
+                .to_string(ctx)?
+                .to_std_string_escaped();
+
+            // Parse the signal
+            let signal = Signal::parse(&signal_str).map_err(|e| {
+                boa_engine::JsError::from_opaque(JsValue::from(JsString::from(e.as_str())))
+            })?;
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            match driver.send_signal(signal) {
+                Ok(()) => Ok(JsValue::undefined()),
+                Err(e) => Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("sendSignal error: {}", e).as_str()),
+                ))),
+            }
+        }),
+    )
+    .name(js_string!("sendSignal"))
+    .length(1)
+    .build()
+    .into()
+}
+
+/// Create the tui.getScrollback() method for getting scrollback line count.
+fn create_get_scrollback_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, _args, _ctx| {
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+            let scrollback = driver.get_scrollback();
+            Ok(JsValue::from(scrollback as i32))
+        }),
+    )
+    .name(js_string!("getScrollback"))
+    .length(0)
+    .build()
+    .into()
+}
+
+/// Create the tui.getInput(chars?) method for getting raw input buffer.
+fn create_get_input_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let chars = if args.get_or_undefined(0).is_undefined() {
+                10000 // default
+            } else {
+                args.get_or_undefined(0).to_u32(ctx)? as usize
+            };
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+            let input = driver.get_input_buffer(chars);
+            Ok(JsValue::from(JsString::from(input.as_str())))
+        }),
+    )
+    .name(js_string!("getInput"))
+    .length(0)
+    .build()
+    .into()
+}
+
+/// Create the tui.getOutput(chars?) method for getting raw output buffer.
+fn create_get_output_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let chars = if args.get_or_undefined(0).is_undefined() {
+                10000 // default
+            } else {
+                args.get_or_undefined(0).to_u32(ctx)? as usize
+            };
+
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+            let output = driver.get_output_buffer(chars);
+            Ok(JsValue::from(JsString::from(output.as_str())))
+        }),
+    )
+    .name(js_string!("getOutput"))
     .length(0)
     .build()
     .into()

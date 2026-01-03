@@ -24,6 +24,7 @@ boa_engine = "0.20"
 rmcp = { version = "0.12", features = ["server", "transport-io"] }
 schemars = "1.2"
 clap = { version = "4", features = ["derive"] }
+futures = "0.3"
 
 [dev-dependencies]
 anyhow = "1"

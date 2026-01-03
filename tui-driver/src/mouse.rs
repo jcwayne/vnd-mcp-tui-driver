@@ -117,6 +117,69 @@ pub fn mouse_double_click(button: MouseButton, x: u16, y: u16) -> Vec<u8> {
     result
 }
 
+/// Generates a mouse move/hover event in SGR 1006 format.
+///
+/// In SGR 1006 mode, a mouse move event is represented by button code 35
+/// (32 for move + 3 for no button) with the 'M' suffix.
+///
+/// # Arguments
+///
+/// * `x` - The 1-based column coordinate
+/// * `y` - The 1-based row coordinate
+///
+/// # Returns
+///
+/// A vector of bytes representing the escape sequence for the mouse move event.
+///
+/// # Example
+///
+/// ```
+/// use tui_driver::mouse::mouse_move;
+///
+/// // Generate a hover event at column 10, row 5
+/// let hover = mouse_move(10, 5);
+/// assert_eq!(hover, b"\x1b[<35;10;5M".to_vec());
+/// ```
+pub fn mouse_move(x: u16, y: u16) -> Vec<u8> {
+    // Button code 35 = 32 (motion) + 3 (no button pressed)
+    format!("\x1b[<35;{};{}M", x, y).into_bytes()
+}
+
+/// Generates a mouse drag event (press, move, release) in SGR 1006 format.
+///
+/// This simulates dragging from (start_x, start_y) to (end_x, end_y) using
+/// a simple two-point drag: press at start, move to end, release at end.
+///
+/// # Arguments
+///
+/// * `button` - The mouse button to use for dragging
+/// * `start_x` - The 1-based starting column coordinate
+/// * `start_y` - The 1-based starting row coordinate
+/// * `end_x` - The 1-based ending column coordinate
+/// * `end_y` - The 1-based ending row coordinate
+///
+/// # Returns
+///
+/// A vector of bytes representing the escape sequences for a drag operation.
+///
+/// # Example
+///
+/// ```
+/// use tui_driver::mouse::{mouse_drag, MouseButton};
+///
+/// // Generate a left-button drag from (1,1) to (10,5)
+/// let drag = mouse_drag(MouseButton::Left, 1, 1, 10, 5);
+/// // Press at (1,1), motion to (10,5), release at (10,5)
+/// ```
+pub fn mouse_drag(button: MouseButton, start_x: u16, start_y: u16, end_x: u16, end_y: u16) -> Vec<u8> {
+    let mut result = mouse_press(button, start_x, start_y);
+    // Motion with button held = 32 + button code
+    let motion_code = 32 + button.button_code();
+    result.extend(format!("\x1b[<{};{};{}M", motion_code, end_x, end_y).into_bytes());
+    result.extend(mouse_release(button, end_x, end_y));
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +281,31 @@ mod tests {
         assert_eq!(format!("{:?}", MouseButton::Left), "Left");
         assert_eq!(format!("{:?}", MouseButton::Middle), "Middle");
         assert_eq!(format!("{:?}", MouseButton::Right), "Right");
+    }
+
+    #[test]
+    fn test_mouse_move() {
+        let seq = mouse_move(10, 5);
+        assert_eq!(seq, b"\x1b[<35;10;5M".to_vec());
+    }
+
+    #[test]
+    fn test_mouse_move_large_coords() {
+        let seq = mouse_move(500, 300);
+        assert_eq!(seq, b"\x1b[<35;500;300M".to_vec());
+    }
+
+    #[test]
+    fn test_mouse_drag_left() {
+        let seq = mouse_drag(MouseButton::Left, 1, 1, 10, 5);
+        // Press at (1,1), motion with button 0 held (code 32), release at (10,5)
+        assert_eq!(seq, b"\x1b[<0;1;1M\x1b[<32;10;5M\x1b[<0;10;5m".to_vec());
+    }
+
+    #[test]
+    fn test_mouse_drag_right() {
+        let seq = mouse_drag(MouseButton::Right, 5, 5, 20, 20);
+        // Press at (5,5), motion with button 2 held (code 34), release at (20,20)
+        assert_eq!(seq, b"\x1b[<2;5;5M\x1b[<34;20;20M\x1b[<2;20;20m".to_vec());
     }
 }

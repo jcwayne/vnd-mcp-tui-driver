@@ -2,7 +2,7 @@
 
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
-use crate::mouse::{mouse_click, mouse_double_click, MouseButton};
+use crate::mouse::{mouse_click, mouse_double_click, mouse_drag, mouse_move, MouseButton};
 use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use crate::terminal::TuiTerminal;
 use parking_lot::Mutex;
@@ -91,6 +91,28 @@ pub enum Signal {
     Hup,
     Kill,
     Quit,
+}
+
+impl Signal {
+    /// Parse a signal name from a string.
+    ///
+    /// Accepts case-insensitive names like "SIGINT", "sigint", "INT", "int".
+    pub fn parse(s: &str) -> std::result::Result<Self, String> {
+        let s_upper = s.to_uppercase();
+        let s_stripped = s_upper.strip_prefix("SIG").unwrap_or(&s_upper);
+
+        match s_stripped {
+            "INT" => Ok(Signal::Int),
+            "TERM" => Ok(Signal::Term),
+            "HUP" => Ok(Signal::Hup),
+            "KILL" => Ok(Signal::Kill),
+            "QUIT" => Ok(Signal::Quit),
+            _ => Err(format!(
+                "Unknown signal '{}'. Valid signals: SIGINT, SIGTERM, SIGHUP, SIGKILL, SIGQUIT",
+                s
+            )),
+        }
+    }
 }
 
 /// Configuration for launching a TUI session
@@ -622,6 +644,55 @@ impl TuiDriver {
             .get_by_ref(ref_id)
             .ok_or_else(|| TuiError::RefNotFound(ref_id.to_string()))?;
         self.right_click_at(span.x, span.y)
+    }
+
+    /// Hover at the specified coordinates.
+    ///
+    /// Sends a mouse move event to simulate hovering.
+    /// Coordinates are 1-based (x=column, y=row).
+    /// Returns an error if coordinates are out of bounds.
+    pub fn hover_at(&self, x: u16, y: u16) -> Result<()> {
+        self.validate_coordinates(x, y)?;
+        let bytes = mouse_move(x, y);
+        self.send_mouse_event(&bytes)
+    }
+
+    /// Hover over an element by reference ID.
+    ///
+    /// Uses the current snapshot to find the element's coordinates.
+    /// Returns an error if the reference is not found.
+    pub fn hover(&self, ref_id: &str) -> Result<()> {
+        let snapshot = self.snapshot();
+        let span = snapshot
+            .get_by_ref(ref_id)
+            .ok_or_else(|| TuiError::RefNotFound(ref_id.to_string()))?;
+        self.hover_at(span.x, span.y)
+    }
+
+    /// Drag from one element to another by reference IDs.
+    ///
+    /// Uses the current snapshot to find both elements' coordinates.
+    /// Returns an error if either reference is not found.
+    pub fn drag(&self, start_ref: &str, end_ref: &str) -> Result<()> {
+        let snapshot = self.snapshot();
+        let start_span = snapshot
+            .get_by_ref(start_ref)
+            .ok_or_else(|| TuiError::RefNotFound(start_ref.to_string()))?;
+        let end_span = snapshot
+            .get_by_ref(end_ref)
+            .ok_or_else(|| TuiError::RefNotFound(end_ref.to_string()))?;
+        self.drag_at(start_span.x, start_span.y, end_span.x, end_span.y)
+    }
+
+    /// Drag from one coordinate to another.
+    ///
+    /// Coordinates are 1-based (x=column, y=row).
+    /// Returns an error if coordinates are out of bounds.
+    pub fn drag_at(&self, start_x: u16, start_y: u16, end_x: u16, end_y: u16) -> Result<()> {
+        self.validate_coordinates(start_x, start_y)?;
+        self.validate_coordinates(end_x, end_y)?;
+        let bytes = mouse_drag(MouseButton::Left, start_x, start_y, end_x, end_y);
+        self.send_mouse_event(&bytes)
     }
 
     /// Get last N characters from input buffer (raw escape sequences sent to process)
