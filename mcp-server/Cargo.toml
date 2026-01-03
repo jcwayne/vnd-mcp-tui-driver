@@ -3,6 +3,10 @@ name = "mcp-tui-driver"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "mcp_tui_driver"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mcp-tui-driver"
 path = "src/main.rs"
@@ -20,3 +24,7 @@ boa_engine = "0.20"
 rmcp = { version = "0.12", features = ["server", "transport-io"] }
 schemars = "1.2"
 clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+anyhow = "1"
+rmcp = { version = "0.12", features = ["client"] }

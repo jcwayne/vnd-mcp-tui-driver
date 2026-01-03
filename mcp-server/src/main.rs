@@ -3,11 +3,7 @@
 //! This server exposes TUI automation capabilities via the Model Context Protocol (MCP).
 //! It supports both stdio (default) and SSE transports.
 
-mod boa;
-mod server;
-mod tools;
-
-pub use server::TuiServer;
+use mcp_tui_driver::TuiServer;
 
 use anyhow::Result;
 use clap::Parser;
