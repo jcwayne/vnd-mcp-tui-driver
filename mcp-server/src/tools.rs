@@ -178,11 +178,24 @@ pub struct RunCodeParams {
     pub code: String,
 }
 
+/// A console log entry from JavaScript execution.
+///
+/// Represents output from console.log/warn/error/info/debug calls.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConsoleLogEntry {
+    /// Log level: "log", "warn", "error", "info", or "debug"
+    pub level: String,
+    /// The logged message content
+    pub message: String,
+}
+
 /// Result of running JavaScript code
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct RunCodeResult {
     /// Result of the script execution
     pub result: String,
+    /// Console output captured during execution
+    pub logs: Vec<ConsoleLogEntry>,
 }
 
 /// Parameters for resizing the terminal

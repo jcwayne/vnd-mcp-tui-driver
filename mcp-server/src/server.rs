@@ -25,11 +25,11 @@ use tracing::error;
 use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
 
 use crate::tools::{
-    BufferResult, ClickAtParams, ClickParams, GetInputParams, GetOutputParams, LaunchParams,
-    LaunchResult, ListSessionsResult, PressKeyParams, PressKeysParams, ResizeParams, RunCodeParams,
-    RunCodeResult, ScreenshotResult, ScrollbackResult, SendTextParams, SessionInfoResult,
-    SessionParams, SignalParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
-    WaitForTextParams, WaitResult,
+    BufferResult, ClickAtParams, ClickParams, ConsoleLogEntry, GetInputParams, GetOutputParams,
+    LaunchParams, LaunchResult, ListSessionsResult, PressKeyParams, PressKeysParams, ResizeParams,
+    RunCodeParams, RunCodeResult, ScreenshotResult, ScrollbackResult, SendTextParams,
+    SessionInfoResult, SessionParams, SignalParams, SnapshotResult, SuccessResult, TextResult,
+    WaitForIdleParams, WaitForTextParams, WaitResult,
 };
 
 // =========================================================================
@@ -795,10 +795,18 @@ impl TuiServer {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
             Some(session) => match crate::boa::execute_script(session.driver(), &params.code) {
-                Ok((result_str, _logs)) => {
-                    // Note: Console logs are captured but not yet included in the response.
-                    // Task 8 will add them to the RunCodeResult.
-                    let result = RunCodeResult { result: result_str };
+                Ok((result_str, logs)) => {
+                    let log_entries: Vec<ConsoleLogEntry> = logs
+                        .into_iter()
+                        .map(|e| ConsoleLogEntry {
+                            level: e.level,
+                            message: e.message,
+                        })
+                        .collect();
+                    let result = RunCodeResult {
+                        result: result_str,
+                        logs: log_entries,
+                    };
                     Ok(CallToolResult::success(vec![Content::text(
                         serde_json::to_string(&result).unwrap(),
                     )]))
