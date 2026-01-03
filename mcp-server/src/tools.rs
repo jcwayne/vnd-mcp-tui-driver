@@ -47,6 +47,7 @@ pub struct TextResult {
 }
 
 /// Result of closing a session
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CloseResult {
     pub success: bool,

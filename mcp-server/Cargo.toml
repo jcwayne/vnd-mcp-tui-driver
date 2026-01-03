@@ -17,6 +17,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 async-trait = "0.1"
 boa_engine = "0.20"
-rmcp = { version = "0.12", features = ["server"] }
+rmcp = { version = "0.12", features = ["server", "transport-io"] }
 schemars = "1.2"
 clap = { version = "4", features = ["derive"] }
