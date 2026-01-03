@@ -9,6 +9,7 @@ use boa_engine::{
     property::Attribute,
     Context, JsArgs, JsResult, JsString, JsValue, Source,
 };
+use base64::Engine;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
@@ -512,6 +513,14 @@ fn create_screenshot_method(context: &mut Context, driver_ptr: *const TuiDriver)
                 format!("screenshot-{}.png", timestamp)
             } else {
                 let name = filename_arg.to_string(ctx)?.to_std_string_escaped();
+
+                // Sanitize: reject filenames with path separators or parent directory references
+                if name.contains('/') || name.contains('\\') || name.contains("..") {
+                    return Err(boa_engine::JsError::from_opaque(JsValue::from(
+                        JsString::from("Filename cannot contain path separators or '..'"),
+                    )));
+                }
+
                 // Ensure filename ends with .png
                 if name.ends_with(".png") {
                     name
@@ -534,7 +543,6 @@ fn create_screenshot_method(context: &mut Context, driver_ptr: *const TuiDriver)
             let screenshot = driver.screenshot();
 
             // Decode base64 data to raw bytes
-            use base64::Engine;
             let png_bytes = base64::engine::general_purpose::STANDARD
                 .decode(&screenshot.data)
                 .map_err(|e| {
