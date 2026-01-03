@@ -4,10 +4,12 @@
 //! that exposes TUI automation methods like `tui.text()`, `tui.sendText()`, etc.
 
 use boa_engine::{
-    js_string, native_function::NativeFunction, object::FunctionObjectBuilder, property::Attribute,
+    js_string, native_function::NativeFunction,
+    object::{builtins::JsArray, FunctionObjectBuilder, JsObject},
+    property::Attribute,
     Context, JsArgs, JsResult, JsString, JsValue, Source,
 };
-use tui_driver::{Key, TuiDriver};
+use tui_driver::{snapshot::Snapshot, Key, Row, Span, TuiDriver};
 
 /// Execute a JavaScript script with access to TUI automation functions.
 ///
@@ -16,7 +18,7 @@ use tui_driver::{Key, TuiDriver};
 /// - `tui.sendText(text)` - Sends text to the terminal
 /// - `tui.pressKey(key)` - Presses a key (e.g., "Enter", "Ctrl+c")
 /// - `tui.clickAt(x, y)` - Clicks at the specified coordinates
-/// - `tui.snapshot()` - Returns a YAML accessibility snapshot
+/// - `tui.snapshot()` - Returns an accessibility snapshot as a JavaScript object
 ///
 /// # Arguments
 ///
@@ -210,18 +212,198 @@ fn create_click_at_method(context: &mut Context, driver_ptr: *const TuiDriver) -
     .into()
 }
 
-/// Create the tui.snapshot() method that returns YAML snapshot.
+/// Convert a Span to a JavaScript object.
+///
+/// Only includes optional fields if they have truthy values.
+fn span_to_js_object(span: &Span, context: &mut Context) -> JsResult<JsObject> {
+    let obj = JsObject::with_null_proto();
+
+    // Required fields
+    obj.set(
+        js_string!("ref"),
+        JsValue::from(JsString::from(span.ref_id.as_str())),
+        false,
+        context,
+    )?;
+    obj.set(
+        js_string!("text"),
+        JsValue::from(JsString::from(span.text.as_str())),
+        false,
+        context,
+    )?;
+    obj.set(
+        js_string!("x"),
+        JsValue::from(span.x as i32),
+        false,
+        context,
+    )?;
+    obj.set(
+        js_string!("y"),
+        JsValue::from(span.y as i32),
+        false,
+        context,
+    )?;
+    obj.set(
+        js_string!("width"),
+        JsValue::from(span.width as i32),
+        false,
+        context,
+    )?;
+
+    // Optional boolean fields - only include if true
+    if span.bold == Some(true) {
+        obj.set(js_string!("bold"), JsValue::from(true), false, context)?;
+    }
+    if span.italic == Some(true) {
+        obj.set(js_string!("italic"), JsValue::from(true), false, context)?;
+    }
+    if span.underline == Some(true) {
+        obj.set(
+            js_string!("underline"),
+            JsValue::from(true),
+            false,
+            context,
+        )?;
+    }
+    if span.inverse == Some(true) {
+        obj.set(js_string!("inverse"), JsValue::from(true), false, context)?;
+    }
+    if span.strikethrough == Some(true) {
+        obj.set(
+            js_string!("strikethrough"),
+            JsValue::from(true),
+            false,
+            context,
+        )?;
+    }
+
+    // Optional string fields - only include if Some
+    if let Some(ref fg) = span.fg {
+        obj.set(
+            js_string!("fg"),
+            JsValue::from(JsString::from(fg.as_str())),
+            false,
+            context,
+        )?;
+    }
+    if let Some(ref bg) = span.bg {
+        obj.set(
+            js_string!("bg"),
+            JsValue::from(JsString::from(bg.as_str())),
+            false,
+            context,
+        )?;
+    }
+    if let Some(ref underline_style) = span.underline_style {
+        obj.set(
+            js_string!("underline_style"),
+            JsValue::from(JsString::from(underline_style.as_str())),
+            false,
+            context,
+        )?;
+    }
+    if let Some(ref blink) = span.blink {
+        obj.set(
+            js_string!("blink"),
+            JsValue::from(JsString::from(blink.as_str())),
+            false,
+            context,
+        )?;
+    }
+    if let Some(ref link) = span.link {
+        obj.set(
+            js_string!("link"),
+            JsValue::from(JsString::from(link.as_str())),
+            false,
+            context,
+        )?;
+    }
+    if let Some(ref image) = span.image {
+        obj.set(
+            js_string!("image"),
+            JsValue::from(JsString::from(image.as_str())),
+            false,
+            context,
+        )?;
+    }
+    if let Some(ref image_size) = span.image_size {
+        obj.set(
+            js_string!("image_size"),
+            JsValue::from(JsString::from(image_size.as_str())),
+            false,
+            context,
+        )?;
+    }
+
+    Ok(obj)
+}
+
+/// Convert a Row to a JavaScript object.
+fn row_to_js_object(row: &Row, context: &mut Context) -> JsResult<JsObject> {
+    let obj = JsObject::with_null_proto();
+
+    // Row number
+    obj.set(
+        js_string!("row_number"),
+        JsValue::from(row.row as i32),
+        false,
+        context,
+    )?;
+
+    // Convert spans to JS array
+    let spans_array = JsArray::new(context);
+    for span in &row.spans {
+        let span_obj = span_to_js_object(span, context)?;
+        spans_array.push(JsValue::from(span_obj), context)?;
+    }
+    obj.set(js_string!("spans"), JsValue::from(spans_array), false, context)?;
+
+    Ok(obj)
+}
+
+/// Convert a Snapshot to a JavaScript object.
+fn snapshot_to_js_object(snapshot: &Snapshot, context: &mut Context) -> JsResult<JsObject> {
+    let obj = JsObject::with_null_proto();
+
+    // Convert rows to JS array
+    let rows_array = JsArray::new(context);
+    for row in &snapshot.rows {
+        let row_obj = row_to_js_object(row, context)?;
+        rows_array.push(JsValue::from(row_obj), context)?;
+    }
+    obj.set(js_string!("rows"), JsValue::from(rows_array), false, context)?;
+
+    // Convert flat spans list to JS array
+    let spans_array = JsArray::new(context);
+    for span in &snapshot.spans {
+        let span_obj = span_to_js_object(span, context)?;
+        spans_array.push(JsValue::from(span_obj), context)?;
+    }
+    obj.set(js_string!("spans"), JsValue::from(spans_array), false, context)?;
+
+    // Add span count
+    obj.set(
+        js_string!("span_count"),
+        JsValue::from(snapshot.spans.len() as i32),
+        false,
+        context,
+    )?;
+
+    Ok(obj)
+}
+
+/// Create the tui.snapshot() method that returns a structured JavaScript object.
 fn create_snapshot_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
     let ptr = driver_ptr as usize;
 
     FunctionObjectBuilder::new(
         context.realm(),
-        NativeFunction::from_copy_closure(move |_this, _args, _ctx| {
+        NativeFunction::from_copy_closure(move |_this, _args, ctx| {
             // SAFETY: ptr was created from a valid reference that outlives this closure
             let driver = unsafe { &*(ptr as *const TuiDriver) };
             let snapshot = driver.snapshot();
-            let yaml = snapshot.yaml.unwrap_or_default();
-            Ok(JsValue::from(JsString::from(yaml.as_str())))
+            let js_obj = snapshot_to_js_object(&snapshot, ctx)?;
+            Ok(JsValue::from(js_obj))
         }),
     )
     .name(js_string!("snapshot"))
