@@ -5,9 +5,11 @@ pub mod error;
 pub mod keys;
 pub mod mouse;
 pub mod snapshot;
+pub mod terminal;
 
 pub use driver::{LaunchOptions, SessionInfo, Signal, TuiDriver};
 pub use error::{Result, TuiError};
 pub use keys::Key;
 pub use mouse::MouseButton;
 pub use snapshot::{build_snapshot, render_screenshot, Row, Screenshot, Snapshot, Span};
+pub use terminal::TuiTerminal;
