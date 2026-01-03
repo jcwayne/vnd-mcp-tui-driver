@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use boa_engine::Context as JsContext;
 use rmcp::{
     handler::server::{tool::ToolRouter, wrapper::Parameters, ServerHandler},
     model::{
@@ -30,6 +31,68 @@ use crate::tools::{
     SessionParams, SignalParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
     WaitForTextParams, WaitResult,
 };
+
+// =========================================================================
+// Session State Types
+// =========================================================================
+
+/// Entry for console output captured from JavaScript execution.
+///
+/// This struct stores messages logged via console.log/warn/error in JS code.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConsoleEntry {
+    /// Log level: "log", "warn", "error", "info", or "debug"
+    pub level: String,
+    /// The logged message content
+    pub message: String,
+}
+
+/// State for a single TUI session.
+///
+/// Wraps the TuiDriver along with optional persistent JavaScript context
+/// and collected console logs. The JS context is lazily initialized on
+/// the first `tui_run_code` call and reused for subsequent calls,
+/// allowing variables to persist across executions.
+///
+/// Note: `boa_engine::Context` is `!Send + !Sync`, but this is safe because
+/// access to SessionState is serialized through a Mutex.
+pub struct SessionState {
+    /// The underlying TUI driver instance
+    driver: TuiDriver,
+    /// Lazily-initialized JavaScript context for run_code
+    /// Created on first use, reused for variable persistence
+    js_context: Option<JsContext>,
+    /// Console output collected from JavaScript execution
+    console_logs: Vec<ConsoleEntry>,
+}
+
+impl SessionState {
+    /// Create a new SessionState wrapping the given TuiDriver.
+    ///
+    /// The JS context starts as None and will be created on demand
+    /// when `tui_run_code` is first called.
+    pub fn new(driver: TuiDriver) -> Self {
+        Self {
+            driver,
+            js_context: None,
+            console_logs: Vec::new(),
+        }
+    }
+
+    /// Get an immutable reference to the TuiDriver.
+    pub fn driver(&self) -> &TuiDriver {
+        &self.driver
+    }
+
+    /// Get a mutable reference to the TuiDriver.
+    pub fn driver_mut(&mut self) -> &mut TuiDriver {
+        &mut self.driver
+    }
+}
+
+// =========================================================================
+// Closed Session Data
+// =========================================================================
 
 /// Directory for storing closed session debug data
 const CLOSED_SESSIONS_DIR: &str = "/tmp/tui-driver-sessions";

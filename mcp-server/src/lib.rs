@@ -6,4 +6,4 @@ mod boa;
 mod server;
 pub mod tools;
 
-pub use server::TuiServer;
+pub use server::{ConsoleEntry, SessionState, TuiServer};
