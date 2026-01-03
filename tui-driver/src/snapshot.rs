@@ -933,6 +933,90 @@ fn ansi_to_rgba(idx: u8) -> Rgba<u8> {
     }
 }
 
+/// Convert wezterm ColorAttribute to RGBA.
+fn wezterm_color_to_rgba(color: &ColorAttribute) -> Rgba<u8> {
+    match color {
+        ColorAttribute::Default => Rgba([255, 255, 255, 255]),
+        ColorAttribute::PaletteIndex(i) => ansi_to_rgba(*i),
+        ColorAttribute::TrueColorWithDefaultFallback(c) => {
+            let (r, g, b, _) = c.as_rgba_u8();
+            Rgba([r, g, b, 255])
+        }
+        ColorAttribute::TrueColorWithPaletteFallback(c, _) => {
+            let (r, g, b, _) = c.as_rgba_u8();
+            Rgba([r, g, b, 255])
+        }
+    }
+}
+
+/// Render wezterm terminal screen to PNG image.
+///
+/// This function creates a simple visual representation of the terminal
+/// by rendering non-empty cells as colored rectangles. The rendering uses
+/// a fixed character size of 10x20 pixels.
+pub fn render_screenshot_from_wezterm(screen: &WeztermScreen) -> Screenshot {
+    let rows = screen.physical_rows;
+    let cols = screen.physical_cols;
+    let char_width = 10u32;
+    let char_height = 20u32;
+    let width = cols as u32 * char_width;
+    let height = rows as u32 * char_height;
+
+    let mut img: RgbaImage = ImageBuffer::from_pixel(width, height, Rgba([0, 0, 0, 255]));
+
+    // Simple rendering: fill rectangles for non-empty cells
+    for row_idx in 0..rows {
+        let phys_idx = screen.phys_row(row_idx as i64);
+
+        screen.for_each_phys_line(|idx, line| {
+            if idx == phys_idx {
+                for cell_ref in line.visible_cells() {
+                    let col = cell_ref.cell_index();
+                    let text = cell_ref.str();
+                    let attrs = cell_ref.attrs();
+
+                    if !text.is_empty() && text != " " && col < cols {
+                        let px = col as u32 * char_width;
+                        let py = row_idx as u32 * char_height;
+
+                        let fg = wezterm_color_to_rgba(&attrs.foreground());
+
+                        // Fill cell area
+                        for dx in 2..char_width - 2 {
+                            for dy in 4..char_height - 4 {
+                                if px + dx < width && py + dy < height {
+                                    img.put_pixel(px + dx, py + dy, fg);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Encode to PNG
+    let mut buffer = Vec::new();
+    {
+        use image::codecs::png::PngEncoder;
+        use image::ImageEncoder;
+        let encoder = PngEncoder::new(&mut buffer);
+        encoder
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .expect("Failed to encode PNG");
+    }
+
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(&buffer);
+
+    Screenshot {
+        data,
+        format: "png".to_string(),
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

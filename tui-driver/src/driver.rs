@@ -3,7 +3,8 @@
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
 use crate::mouse::{mouse_click, mouse_double_click, MouseButton};
-use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
+use crate::snapshot::{build_snapshot_from_wezterm, render_screenshot_from_wezterm, Screenshot, Snapshot};
+use crate::terminal::TuiTerminal;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -15,9 +16,6 @@ use std::time::Duration;
 
 /// Default capacity for debug buffers (characters)
 const BUFFER_CAPACITY: usize = 10000;
-
-/// Default scrollback lines for vt100 parser
-const SCROLLBACK_LINES: usize = 500;
 
 /// Ring buffer for storing last N characters of I/O
 #[derive(Debug)]
@@ -156,8 +154,8 @@ pub struct TuiDriver {
     /// Child process handle
     child: Mutex<Box<dyn Child + Send + Sync>>,
 
-    /// Terminal parser state
-    parser: Arc<Mutex<vt100::Parser>>,
+    /// Terminal emulator (wezterm-based)
+    terminal: Arc<TuiTerminal>,
 
     /// Timestamp of last PTY update (for wait_for_idle)
     last_update: Arc<AtomicU64>,
@@ -225,12 +223,12 @@ impl TuiDriver {
             .take_writer()
             .map_err(|e| TuiError::PtyError(e.to_string()))?;
 
-        // Initialize parser with scrollback
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(
+        // Initialize terminal with scrollback
+        let terminal = Arc::new(TuiTerminal::new(
             options.rows,
             options.cols,
-            SCROLLBACK_LINES,
-        )));
+            500, // scrollback lines
+        ));
         let last_update = Arc::new(AtomicU64::new(current_timestamp_ms()));
         let running = Arc::new(AtomicBool::new(true));
 
@@ -240,7 +238,7 @@ impl TuiDriver {
 
         // Spawn background reader thread (not tokio task - PTY read is blocking)
         let reader_thread = {
-            let parser = Arc::clone(&parser);
+            let terminal = Arc::clone(&terminal);
             let last_update = Arc::clone(&last_update);
             let running = Arc::clone(&running);
             let output_buffer = Arc::clone(&output_buffer);
@@ -261,9 +259,8 @@ impl TuiDriver {
                             let text = String::from_utf8_lossy(&buf[..n]);
                             output_buffer.push_str(&text);
 
-                            // Feed bytes to parser
-                            let mut parser = parser.lock();
-                            parser.process(&buf[..n]);
+                            // Feed bytes to terminal
+                            terminal.advance_bytes(&buf[..n]);
                             last_update.store(current_timestamp_ms(), Ordering::SeqCst);
                         }
                         Err(e) => {
@@ -283,7 +280,7 @@ impl TuiDriver {
             master: Mutex::new(pty_pair.master),
             master_writer: Mutex::new(master_writer),
             child: Mutex::new(child),
-            parser,
+            terminal,
             last_update,
             running,
             cols: AtomicU16::new(options.cols),
@@ -325,44 +322,65 @@ impl TuiDriver {
 
     /// Get plain text snapshot of current screen
     pub fn text(&self) -> String {
-        let parser = self.parser.lock();
-        let screen = parser.screen();
-        let mut result = String::new();
+        self.terminal.with_screen(|screen| {
+            let num_rows = screen.physical_rows;
+            let num_cols = screen.physical_cols;
+            let mut result = String::new();
 
-        for row in 0..screen.size().0 {
-            let row_text: String = (0..screen.size().1)
-                .map(|col| {
-                    screen
-                        .cell(row, col)
-                        .map(|c| c.contents())
-                        .unwrap_or_else(|| " ".to_string())
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            result.push_str(row_text.trim_end());
-            result.push('\n');
-        }
+            for row_idx in 0..num_rows {
+                let phys_idx = screen.phys_row(row_idx as i64);
+                let mut row_text = String::new();
 
-        // Trim trailing empty lines
-        while result.ends_with("\n\n") {
-            result.pop();
-        }
+                screen.for_each_phys_line(|idx, line| {
+                    if idx == phys_idx {
+                        // Build row text from visible cells
+                        let mut last_col = 0;
+                        for cell_ref in line.visible_cells() {
+                            let col = cell_ref.cell_index();
+                            // Fill gaps with spaces
+                            while last_col < col && last_col < num_cols {
+                                row_text.push(' ');
+                                last_col += 1;
+                            }
+                            if col < num_cols {
+                                let text = cell_ref.str();
+                                if text.is_empty() {
+                                    row_text.push(' ');
+                                } else {
+                                    row_text.push_str(text);
+                                }
+                                last_col = col + 1;
+                            }
+                        }
+                        // Fill remaining with spaces
+                        while last_col < num_cols {
+                            row_text.push(' ');
+                            last_col += 1;
+                        }
+                    }
+                });
 
-        result
+                result.push_str(row_text.trim_end());
+                result.push('\n');
+            }
+
+            // Trim trailing empty lines
+            while result.ends_with("\n\n") {
+                result.pop();
+            }
+
+            result
+        })
     }
 
     /// Get accessibility-style snapshot of current screen
     pub fn snapshot(&self) -> Snapshot {
-        let parser = self.parser.lock();
-        let screen = parser.screen();
-        build_snapshot(screen)
+        self.terminal.with_screen(|screen| build_snapshot_from_wezterm(screen))
     }
 
     /// Get a PNG screenshot of the current screen
     pub fn screenshot(&self) -> Screenshot {
-        let parser = self.parser.lock();
-        let screen = parser.screen();
-        render_screenshot(screen)
+        self.terminal.with_screen(|screen| render_screenshot_from_wezterm(screen))
     }
 
     /// Send text to the terminal
@@ -488,11 +506,8 @@ impl TuiDriver {
         self.cols.store(cols, Ordering::SeqCst);
         self.rows.store(rows, Ordering::SeqCst);
 
-        // Update parser dimensions
-        {
-            let mut parser = self.parser.lock();
-            parser.set_size(rows, cols);
-        }
+        // Update terminal dimensions
+        self.terminal.resize(rows, cols);
 
         Ok(())
     }
@@ -621,11 +636,9 @@ impl TuiDriver {
 
     /// Get scrollback line count (number of lines that have scrolled off screen)
     ///
-    /// Note: vt100's public API doesn't expose individual scrollback cells.
     /// Use get_output_buffer() for raw output history including scrollback content.
     pub fn get_scrollback(&self) -> usize {
-        let parser = self.parser.lock();
-        parser.screen().scrollback()
+        self.terminal.scrollback()
     }
 
     /// Clear all debug buffers
