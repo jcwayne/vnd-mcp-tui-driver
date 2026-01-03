@@ -43,7 +43,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | ./target/rel
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tui_close","arguments":{"session_id":"<id>"}}}
 ```
 
-## Available Tools (19 total)
+## Available Tools (20 total)
 
 ### Session Management
 
@@ -409,9 +409,22 @@ Returns: `{"success": true}`
 
 ### Scripting
 
+#### tui_get_code_interface
+
+Get TypeScript interface definitions for `tui_run_code`. Call this before using `tui_run_code` to understand the available API.
+
+```json
+{
+  "name": "tui_get_code_interface",
+  "arguments": {}
+}
+```
+
+Returns: TypeScript interface definitions as plain text, including the `Tui` interface with all available methods and the `Console` interface.
+
 #### tui_run_code
 
-Execute JavaScript code with access to TUI automation functions.
+Execute JavaScript code with access to TUI automation functions. Call `tui_get_code_interface` first to get TypeScript definitions for the available API.
 
 ```json
 {
@@ -424,13 +437,48 @@ Execute JavaScript code with access to TUI automation functions.
 ```
 
 Available `tui` object methods:
+
+**Display:**
 - `tui.text()` - Returns the current screen text
+- `tui.snapshot()` - Returns an accessibility snapshot as a JavaScript object
+- `tui.screenshot(filename?)` - Takes a screenshot and saves to file, returns the file path
+
+**Input:**
 - `tui.sendText(text)` - Sends text to the terminal
 - `tui.pressKey(key)` - Presses a key (e.g., "Enter", "Ctrl+c")
-- `tui.clickAt(x, y)` - Clicks at the specified coordinates
-- `tui.snapshot()` - Returns a YAML accessibility snapshot
+- `tui.pressKeys(keys)` - Presses multiple keys in sequence
 
-Returns: `{"result": "<last expression value>"}`
+**Mouse:**
+- `tui.click(ref)` - Clicks on element by reference ID
+- `tui.clickAt(x, y)` - Clicks at the specified coordinates
+- `tui.doubleClick(ref)` - Double-clicks on element by reference ID
+- `tui.rightClick(ref)` - Right-clicks on element by reference ID
+- `tui.hover(ref)` - Hovers over element by reference ID
+- `tui.drag(startRef, endRef)` - Drags from one element to another
+
+**Wait:**
+- `tui.waitForText(text, timeoutMs?)` - Waits for text to appear, returns boolean
+- `tui.waitForIdle(timeoutMs?, idleMs?)` - Waits for screen to settle, returns boolean
+
+**Control:**
+- `tui.resize(cols, rows)` - Resizes the terminal
+- `tui.sendSignal(signal)` - Sends a signal (SIGINT, SIGTERM, etc.)
+
+**Debug:**
+- `tui.getScrollback()` - Returns number of lines scrolled off screen
+- `tui.getInput(chars?)` - Returns raw input buffer
+- `tui.getOutput(chars?)` - Returns raw output buffer
+
+**Console output** is captured and returned with results:
+- `console.log(...)`, `console.info(...)`, `console.warn(...)`, `console.error(...)`, `console.debug(...)`
+
+Returns:
+```json
+{
+  "result": "<last expression value>",
+  "logs": [{"level": "log", "message": "..."}, ...]
+}
+```
 
 ## Architecture
 

@@ -884,7 +884,7 @@ impl TuiServer {
 
     /// Execute JavaScript code with tui object for complex automation
     #[tool(
-        description = "Execute JavaScript code with tui object for complex automation. Available: tui.text(), tui.sendText(text), tui.pressKey(key), tui.clickAt(x,y), tui.snapshot()"
+        description = "Execute JavaScript code with tui object for complex automation. Call tui_get_code_interface first to get TypeScript definitions. Available methods include: tui.text(), tui.sendText(), tui.pressKey(), tui.pressKeys(), tui.click(), tui.clickAt(), tui.doubleClick(), tui.rightClick(), tui.hover(), tui.drag(), tui.waitForText(), tui.waitForIdle(), tui.snapshot(), tui.screenshot(), tui.resize(), tui.sendSignal(), plus debug methods. Console output (console.log, etc.) is captured and returned in the logs field."
     )]
     async fn tui_run_code(
         &self,
