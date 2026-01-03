@@ -4,7 +4,10 @@
 //! It communicates over stdin/stdout using JSON-RPC 2.0.
 
 mod boa;
+mod server;
 mod tools;
+
+pub use server::TuiServer;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
