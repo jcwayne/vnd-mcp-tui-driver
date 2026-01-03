@@ -9,6 +9,8 @@ use boa_engine::{
     property::Attribute,
     Context, JsArgs, JsResult, JsString, JsValue, Source,
 };
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
 
 /// Execute a JavaScript script with access to TUI automation functions.
@@ -35,6 +37,7 @@ use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
 ///
 /// Snapshot:
 /// - `tui.snapshot()` - Returns an accessibility snapshot as a JavaScript object
+/// - `tui.screenshot(filename?)` - Takes a screenshot and saves to file, returns the file path
 ///
 /// Control:
 /// - `tui.resize(cols, rows)` - Resizes the terminal
@@ -140,6 +143,10 @@ fn create_tui_object(context: &mut Context, driver_ptr: *const TuiDriver) -> JsR
     // Snapshot method
     let snapshot_fn = create_snapshot_method(context, driver_ptr);
     tui_obj.set(js_string!("snapshot"), snapshot_fn, false, context)?;
+
+    // Screenshot method (saves to file)
+    let screenshot_fn = create_screenshot_method(context, driver_ptr);
+    tui_obj.set(js_string!("screenshot"), screenshot_fn, false, context)?;
 
     // Control methods
     let resize_fn = create_resize_method(context, driver_ptr);
@@ -472,6 +479,84 @@ fn create_snapshot_method(context: &mut Context, driver_ptr: *const TuiDriver) -
         }),
     )
     .name(js_string!("snapshot"))
+    .length(0)
+    .build()
+    .into()
+}
+
+/// Create the tui.screenshot(filename?) method that saves a screenshot to file.
+///
+/// If filename is not provided, generates one with timestamp.
+/// Creates directory `/tmp/tui-screenshots/<session-id>/` if it does not exist.
+/// Returns the full file path of the saved screenshot.
+fn create_screenshot_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
+    let ptr = driver_ptr as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            // SAFETY: ptr was created from a valid reference that outlives this closure
+            let driver = unsafe { &*(ptr as *const TuiDriver) };
+
+            // Get session ID for directory path
+            let session_id = driver.session_id();
+
+            // Get optional filename argument
+            let filename_arg = args.get_or_undefined(0);
+            let filename = if filename_arg.is_undefined() || filename_arg.is_null() {
+                // Generate filename with timestamp
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                format!("screenshot-{}.png", timestamp)
+            } else {
+                let name = filename_arg.to_string(ctx)?.to_std_string_escaped();
+                // Ensure filename ends with .png
+                if name.ends_with(".png") {
+                    name
+                } else {
+                    format!("{}.png", name)
+                }
+            };
+
+            // Create directory path
+            let dir_path = format!("/tmp/tui-screenshots/{}", session_id);
+
+            // Create directory if it does not exist
+            if let Err(e) = fs::create_dir_all(&dir_path) {
+                return Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("Failed to create screenshot directory: {}", e).as_str()),
+                )));
+            }
+
+            // Take screenshot
+            let screenshot = driver.screenshot();
+
+            // Decode base64 data to raw bytes
+            use base64::Engine;
+            let png_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&screenshot.data)
+                .map_err(|e| {
+                    boa_engine::JsError::from_opaque(JsValue::from(JsString::from(
+                        format!("Failed to decode screenshot data: {}", e).as_str(),
+                    )))
+                })?;
+
+            // Full file path
+            let file_path = format!("{}/{}", dir_path, filename);
+
+            // Write PNG bytes to file
+            if let Err(e) = fs::write(&file_path, png_bytes) {
+                return Err(boa_engine::JsError::from_opaque(JsValue::from(
+                    JsString::from(format!("Failed to write screenshot file: {}", e).as_str()),
+                )));
+            }
+
+            Ok(JsValue::from(JsString::from(file_path.as_str())))
+        }),
+    )
+    .name(js_string!("screenshot"))
     .length(0)
     .build()
     .into()
