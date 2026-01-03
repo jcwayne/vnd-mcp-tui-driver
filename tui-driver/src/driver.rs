@@ -3,7 +3,7 @@
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
 use crate::mouse::{mouse_click, mouse_double_click, MouseButton};
-use crate::snapshot::{build_snapshot_from_wezterm, render_screenshot_from_wezterm, Screenshot, Snapshot};
+use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use crate::terminal::TuiTerminal;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -375,12 +375,12 @@ impl TuiDriver {
 
     /// Get accessibility-style snapshot of current screen
     pub fn snapshot(&self) -> Snapshot {
-        self.terminal.with_screen(|screen| build_snapshot_from_wezterm(screen))
+        self.terminal.with_screen(|screen| build_snapshot(screen))
     }
 
     /// Get a PNG screenshot of the current screen
     pub fn screenshot(&self) -> Screenshot {
-        self.terminal.with_screen(|screen| render_screenshot_from_wezterm(screen))
+        self.terminal.with_screen(|screen| render_screenshot(screen))
     }
 
     /// Send text to the terminal

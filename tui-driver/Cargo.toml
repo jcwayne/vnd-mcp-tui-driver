@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 portable-pty = "0.8"
-vt100 = "0.15"
 termwiz = { git = "https://github.com/wezterm/wezterm", tag = "20240203-110809-5046fc22" }
 wezterm-term = { git = "https://github.com/wezterm/wezterm", tag = "20240203-110809-5046fc22" }
 tokio = { version = "1", features = ["full", "sync", "time"] }

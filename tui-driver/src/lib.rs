@@ -11,8 +11,5 @@ pub use driver::{LaunchOptions, SessionInfo, Signal, TuiDriver};
 pub use error::{Result, TuiError};
 pub use keys::Key;
 pub use mouse::MouseButton;
-pub use snapshot::{
-    build_snapshot, build_snapshot_from_wezterm, render_screenshot, render_screenshot_from_wezterm,
-    Row, Screenshot, Snapshot, Span,
-};
+pub use snapshot::{build_snapshot, render_screenshot, Row, Screenshot, Snapshot, Span};
 pub use terminal::TuiTerminal;
