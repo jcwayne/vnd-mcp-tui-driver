@@ -1737,6 +1737,7 @@ dependencies = [
  "boa_engine",
  "clap",
  "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",

@@ -4,22 +4,88 @@
 //! using the rmcp library.
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use rmcp::{
+    handler::server::{tool::ToolRouter, wrapper::Parameters, ServerHandler},
     model::{
         CallToolResult, Content, Implementation, ListToolsResult, ServerCapabilities, ServerInfo,
         ToolsCapability,
     },
-    handler::server::{tool::ToolCallContext, ServerHandler},
     service::{RequestContext, RoleServer},
-    tool, tool_router,
-    handler::server::tool::ToolRouter,
-    ErrorData as McpError,
+    tool, tool_router, ErrorData as McpError,
+};
+use serde::{Deserialize, Serialize};
+use tracing::error;
+
+use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
+
+use crate::tools::{
+    BufferResult, ClickAtParams, ClickParams, GetInputParams, GetOutputParams, LaunchParams,
+    LaunchResult, ListSessionsResult, PressKeyParams, PressKeysParams, ResizeParams, RunCodeParams,
+    RunCodeResult, ScreenshotResult, ScrollbackResult, SendTextParams, SessionInfoResult,
+    SessionParams, SignalParams, SnapshotResult, SuccessResult, TextResult, WaitForIdleParams,
+    WaitForTextParams, WaitResult,
 };
 
-use tui_driver::TuiDriver;
+/// Directory for storing closed session debug data
+const CLOSED_SESSIONS_DIR: &str = "/tmp/tui-driver-sessions";
+
+/// Data saved when a session is closed (for post-mortem debugging)
+#[derive(Debug, Serialize, Deserialize)]
+struct ClosedSessionData {
+    session_id: String,
+    command: String,
+    input_buffer: String,
+    output_buffer: String,
+    scrollback_lines: usize,
+    closed_at: u64,
+}
+
+/// Get the path for a closed session's data file
+fn closed_session_path(session_id: &str) -> PathBuf {
+    PathBuf::from(CLOSED_SESSIONS_DIR).join(format!("{}.json", session_id))
+}
+
+/// Save closed session data to disk
+fn save_closed_session(driver: &TuiDriver) -> anyhow::Result<()> {
+    // Ensure directory exists
+    fs::create_dir_all(CLOSED_SESSIONS_DIR)?;
+
+    let info = driver.info();
+    let data = ClosedSessionData {
+        session_id: info.session_id.clone(),
+        command: info.command,
+        input_buffer: driver.get_input_buffer(10000),
+        output_buffer: driver.get_output_buffer(10000),
+        scrollback_lines: driver.get_scrollback(),
+        closed_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+
+    let path = closed_session_path(&info.session_id);
+    let json = serde_json::to_string_pretty(&data)?;
+    fs::write(path, json)?;
+
+    Ok(())
+}
+
+/// Load closed session data from disk
+fn load_closed_session(session_id: &str) -> Option<ClosedSessionData> {
+    let path = closed_session_path(session_id);
+    if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+    } else {
+        None
+    }
+}
 
 /// TUI MCP Server
 ///
@@ -51,15 +117,730 @@ impl Default for TuiServer {
 
 #[tool_router]
 impl TuiServer {
-    /// Placeholder tool for initial setup - will be replaced with actual TUI tools
+    // =========================================================================
+    // Session Management Tools
+    // =========================================================================
+
+    /// Launch a new TUI application session
+    #[tool(description = "Launch a new TUI application session")]
+    async fn tui_launch(
+        &self,
+        Parameters(params): Parameters<LaunchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let options = LaunchOptions::new(&params.command)
+            .args(params.args)
+            .size(params.cols, params.rows);
+
+        match TuiDriver::launch(options).await {
+            Ok(driver) => {
+                let session_id = driver.session_id().to_string();
+                let mut sessions = self.sessions.lock().await;
+                sessions.insert(session_id.clone(), driver);
+
+                let result = LaunchResult { session_id };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Error launching session: {}",
+                e
+            ))])),
+        }
+    }
+
+    /// Close a TUI session
+    #[tool(description = "Close a TUI session")]
+    async fn tui_close(
+        &self,
+        Parameters(params): Parameters<SessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut sessions = self.sessions.lock().await;
+        match sessions.remove(&params.session_id) {
+            Some(driver) => {
+                // Save debug buffers to disk before closing
+                if let Err(e) = save_closed_session(&driver) {
+                    error!("Error saving closed session data: {}", e);
+                }
+
+                // Close the driver
+                if let Err(e) = driver.close().await {
+                    error!("Error closing session: {}", e);
+                }
+
+                let result = SuccessResult { success: true };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// List all active TUI sessions
     #[tool(description = "List all active TUI sessions")]
     async fn tui_list_sessions(&self) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         let session_ids: Vec<String> = sessions.keys().cloned().collect();
-        let json = serde_json::json!({ "sessions": session_ids });
+
+        let result = ListSessionsResult {
+            sessions: session_ids,
+        };
         Ok(CallToolResult::success(vec![Content::text(
-            json.to_string(),
+            serde_json::to_string(&result).unwrap(),
         )]))
+    }
+
+    /// Get information about a TUI session
+    #[tool(description = "Get information about a TUI session")]
+    async fn tui_get_session(
+        &self,
+        Parameters(params): Parameters<SessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let info = driver.info();
+                let result = SessionInfoResult {
+                    session_id: info.session_id,
+                    command: info.command,
+                    cols: info.cols,
+                    rows: info.rows,
+                    running: info.running,
+                };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Display Tools
+    // =========================================================================
+
+    /// Get the current text content of a TUI session
+    #[tool(description = "Get the current text content of a TUI session")]
+    async fn tui_text(
+        &self,
+        Parameters(params): Parameters<SessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let text = driver.text();
+                let result = TextResult { text };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Get accessibility-style snapshot with element references
+    #[tool(description = "Get accessibility-style snapshot with element references")]
+    async fn tui_snapshot(
+        &self,
+        Parameters(params): Parameters<SessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let snapshot = driver.snapshot();
+                let yaml = snapshot.yaml.clone().unwrap_or_default();
+                let span_count = snapshot.span_count();
+
+                let result = SnapshotResult { yaml, span_count };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Take a PNG screenshot of the terminal
+    #[tool(description = "Take a PNG screenshot of the terminal")]
+    async fn tui_screenshot(
+        &self,
+        Parameters(params): Parameters<SessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let screenshot = driver.screenshot();
+
+                let result = ScreenshotResult {
+                    data: screenshot.data,
+                    format: screenshot.format,
+                    width: screenshot.width,
+                    height: screenshot.height,
+                };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Input Tools
+    // =========================================================================
+
+    /// Press a single key in the TUI session
+    #[tool(
+        description = "Press a single key in the TUI session. Supports special keys (Enter, Tab, Escape, etc.), arrow keys, function keys, and modifier combinations (Ctrl+c, Alt+x)."
+    )]
+    async fn tui_press_key(
+        &self,
+        Parameters(params): Parameters<PressKeyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Parse the key string
+        let key = match Key::parse(&params.key) {
+            Ok(k) => k,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Invalid key: {}",
+                    e
+                ))]));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.press_key(&key) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error pressing key: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Press multiple keys in sequence in the TUI session
+    #[tool(description = "Press multiple keys in sequence in the TUI session")]
+    async fn tui_press_keys(
+        &self,
+        Parameters(params): Parameters<PressKeysParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Parse all keys first
+        let mut keys = Vec::new();
+        for key_str in &params.keys {
+            match Key::parse(key_str) {
+                Ok(k) => keys.push(k),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Invalid key '{}': {}",
+                        key_str, e
+                    ))]));
+                }
+            }
+        }
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.press_keys(&keys) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error pressing keys: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Send raw text to the TUI session (useful for typing strings)
+    #[tool(description = "Send raw text to the TUI session (useful for typing strings)")]
+    async fn tui_send_text(
+        &self,
+        Parameters(params): Parameters<SendTextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.send_text(&params.text) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error sending text: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Mouse Tools
+    // =========================================================================
+
+    /// Click on an element by reference ID from the snapshot
+    #[tool(description = "Click on an element by reference ID from the snapshot")]
+    async fn tui_click(
+        &self,
+        Parameters(params): Parameters<ClickParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.click(&params.ref_id) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error clicking element: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Click at specific coordinates in the terminal
+    #[tool(description = "Click at specific coordinates in the terminal")]
+    async fn tui_click_at(
+        &self,
+        Parameters(params): Parameters<ClickAtParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.click_at(params.x, params.y) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error clicking at coordinates: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Double-click on an element by reference ID from the snapshot
+    #[tool(description = "Double-click on an element by reference ID from the snapshot")]
+    async fn tui_double_click(
+        &self,
+        Parameters(params): Parameters<ClickParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.double_click(&params.ref_id) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error double-clicking element: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Right-click on an element by reference ID from the snapshot
+    #[tool(description = "Right-click on an element by reference ID from the snapshot")]
+    async fn tui_right_click(
+        &self,
+        Parameters(params): Parameters<ClickParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.right_click(&params.ref_id) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error right-clicking element: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Wait Tools
+    // =========================================================================
+
+    /// Wait for specific text to appear on the screen
+    #[tool(description = "Wait for specific text to appear on the screen")]
+    async fn tui_wait_for_text(
+        &self,
+        Parameters(params): Parameters<WaitForTextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.wait_for_text(&params.text, params.timeout_ms).await {
+                Ok(found) => {
+                    let result = WaitResult { found };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error waiting for text: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Wait for the screen to stop changing (become idle)
+    #[tool(description = "Wait for the screen to stop changing (become idle)")]
+    async fn tui_wait_for_idle(
+        &self,
+        Parameters(params): Parameters<WaitForIdleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                match driver
+                    .wait_for_idle(params.idle_ms, params.timeout_ms)
+                    .await
+                {
+                    Ok(()) => {
+                        let result = SuccessResult { success: true };
+                        Ok(CallToolResult::success(vec![Content::text(
+                            serde_json::to_string(&result).unwrap(),
+                        )]))
+                    }
+                    Err(e) => {
+                        // Timeout is not really an error, just means it didn't become idle
+                        Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Timeout waiting for idle: {}",
+                            e
+                        ))]))
+                    }
+                }
+            }
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Control Tools
+    // =========================================================================
+
+    /// Resize the terminal window
+    #[tool(description = "Resize the terminal window")]
+    async fn tui_resize(
+        &self,
+        Parameters(params): Parameters<ResizeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.resize(params.cols, params.rows) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error resizing terminal: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    /// Send a signal to the TUI process (SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT)
+    #[tool(
+        description = "Send a signal to the TUI process (SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT)"
+    )]
+    async fn tui_send_signal(
+        &self,
+        Parameters(params): Parameters<SignalParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Parse signal name to Signal enum
+        let signal = match params.signal.to_uppercase().as_str() {
+            "SIGINT" | "INT" => Signal::Int,
+            "SIGTERM" | "TERM" => Signal::Term,
+            "SIGKILL" | "KILL" => Signal::Kill,
+            "SIGHUP" | "HUP" => Signal::Hup,
+            "SIGQUIT" | "QUIT" => Signal::Quit,
+            _ => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Unknown signal: {}. Supported signals: SIGINT, SIGTERM, SIGKILL, SIGHUP, SIGQUIT",
+                    params.signal
+                ))]));
+            }
+        };
+
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match driver.send_signal(signal) {
+                Ok(()) => {
+                    let result = SuccessResult { success: true };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error sending signal: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Script Tool
+    // =========================================================================
+
+    /// Execute JavaScript code with tui object for complex automation
+    #[tool(
+        description = "Execute JavaScript code with tui object for complex automation. Available: tui.text(), tui.sendText(text), tui.pressKey(key), tui.clickAt(x,y), tui.snapshot()"
+    )]
+    async fn tui_run_code(
+        &self,
+        Parameters(params): Parameters<RunCodeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => match crate::boa::execute_script(driver, &params.code) {
+                Ok(result_str) => {
+                    let result = RunCodeResult { result: result_str };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error executing JavaScript: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session not found: {}",
+                params.session_id
+            ))])),
+        }
+    }
+
+    // =========================================================================
+    // Debug Tools
+    // =========================================================================
+
+    /// Get raw input sent to the process (escape sequences included)
+    #[tool(
+        description = "Get raw input sent to the process (escape sequences included). Useful for debugging what was sent to the terminal."
+    )]
+    async fn tui_get_input(
+        &self,
+        Parameters(params): Parameters<GetInputParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let content = driver.get_input_buffer(params.chars);
+                let result = BufferResult {
+                    length: content.len(),
+                    content,
+                };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => {
+                // Check for closed session on disk
+                if let Some(closed) = load_closed_session(&params.session_id) {
+                    let content = if params.chars >= closed.input_buffer.len() {
+                        closed.input_buffer
+                    } else {
+                        closed
+                            .input_buffer
+                            .chars()
+                            .rev()
+                            .take(params.chars)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect()
+                    };
+                    let result = BufferResult {
+                        length: content.len(),
+                        content,
+                    };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                } else {
+                    Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Session not found: {}",
+                        params.session_id
+                    ))]))
+                }
+            }
+        }
+    }
+
+    /// Get raw PTY output (escape sequences included)
+    #[tool(
+        description = "Get raw PTY output (escape sequences included). Useful for debugging terminal output."
+    )]
+    async fn tui_get_output(
+        &self,
+        Parameters(params): Parameters<GetOutputParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let content = driver.get_output_buffer(params.chars);
+                let result = BufferResult {
+                    length: content.len(),
+                    content,
+                };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => {
+                // Check for closed session on disk
+                if let Some(closed) = load_closed_session(&params.session_id) {
+                    let content = if params.chars >= closed.output_buffer.len() {
+                        closed.output_buffer
+                    } else {
+                        closed
+                            .output_buffer
+                            .chars()
+                            .rev()
+                            .take(params.chars)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect()
+                    };
+                    let result = BufferResult {
+                        length: content.len(),
+                        content,
+                    };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                } else {
+                    Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Session not found: {}",
+                        params.session_id
+                    ))]))
+                }
+            }
+        }
+    }
+
+    /// Get the number of lines that have scrolled off the visible screen
+    #[tool(description = "Get the number of lines that have scrolled off the visible screen.")]
+    async fn tui_get_scrollback(
+        &self,
+        Parameters(params): Parameters<SessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(&params.session_id) {
+            Some(driver) => {
+                let lines = driver.get_scrollback();
+                let result = ScrollbackResult { lines };
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap(),
+                )]))
+            }
+            None => {
+                // Check for closed session on disk
+                if let Some(closed) = load_closed_session(&params.session_id) {
+                    let result = ScrollbackResult {
+                        lines: closed.scrollback_lines,
+                    };
+                    Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string(&result).unwrap(),
+                    )]))
+                } else {
+                    Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Session not found: {}",
+                        params.session_id
+                    ))]))
+                }
+            }
+        }
     }
 }
 
@@ -100,7 +881,8 @@ impl ServerHandler for TuiServer {
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
-            let ctx = ToolCallContext::new(self, request, context);
+            let ctx =
+                rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
             self.tool_router.call(ctx).await
         }
     }

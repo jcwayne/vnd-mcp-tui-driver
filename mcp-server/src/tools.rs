@@ -1,9 +1,10 @@
 //! MCP tool definitions for TUI automation
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Parameters for the tui_launch tool
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LaunchParams {
     /// Command to execute
     pub command: String,
@@ -27,32 +28,32 @@ fn default_rows() -> u16 {
 }
 
 /// Parameters for tools that operate on an existing session
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
 }
 
 /// Result of launching a TUI session
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LaunchResult {
     pub session_id: String,
 }
 
 /// Result of getting text from a session
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct TextResult {
     pub text: String,
 }
 
 /// Result of closing a session
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CloseResult {
     pub success: bool,
 }
 
 /// Parameters for pressing a single key
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PressKeyParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -61,7 +62,7 @@ pub struct PressKeyParams {
 }
 
 /// Parameters for pressing multiple keys
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PressKeysParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -70,7 +71,7 @@ pub struct PressKeysParams {
 }
 
 /// Parameters for sending raw text
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SendTextParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -79,7 +80,7 @@ pub struct SendTextParams {
 }
 
 /// Parameters for waiting for text to appear
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WaitForTextParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -91,7 +92,7 @@ pub struct WaitForTextParams {
 }
 
 /// Parameters for waiting for screen to become idle
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WaitForIdleParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -112,21 +113,21 @@ fn default_idle_ms() -> u64 {
 }
 
 /// Result of a wait operation
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WaitResult {
     /// Whether the condition was met before timeout
     pub found: bool,
 }
 
 /// Result indicating success
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SuccessResult {
     /// Whether the operation succeeded
     pub success: bool,
 }
 
 /// Result of getting an accessibility-style snapshot
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SnapshotResult {
     /// YAML representation of the snapshot
     pub yaml: String,
@@ -135,7 +136,7 @@ pub struct SnapshotResult {
 }
 
 /// Result of taking a screenshot
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenshotResult {
     /// Base64-encoded PNG image data
     pub data: String,
@@ -148,7 +149,7 @@ pub struct ScreenshotResult {
 }
 
 /// Parameters for clicking on an element by reference ID
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ClickParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -157,7 +158,7 @@ pub struct ClickParams {
 }
 
 /// Parameters for clicking at specific coordinates
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ClickAtParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -168,7 +169,7 @@ pub struct ClickAtParams {
 }
 
 /// Parameters for running JavaScript code
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct RunCodeParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -177,14 +178,14 @@ pub struct RunCodeParams {
 }
 
 /// Result of running JavaScript code
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct RunCodeResult {
     /// Result of the script execution
     pub result: String,
 }
 
 /// Parameters for resizing the terminal
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ResizeParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -195,7 +196,7 @@ pub struct ResizeParams {
 }
 
 /// Parameters for sending a signal to the process
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SignalParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -204,14 +205,14 @@ pub struct SignalParams {
 }
 
 /// Result of listing sessions
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListSessionsResult {
     /// List of active session IDs
     pub sessions: Vec<String>,
 }
 
 /// Result of getting session info
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionInfoResult {
     /// Session identifier
     pub session_id: String,
@@ -226,7 +227,7 @@ pub struct SessionInfoResult {
 }
 
 /// Parameters for getting input buffer (raw escape sequences sent to process)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GetInputParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -236,7 +237,7 @@ pub struct GetInputParams {
 }
 
 /// Parameters for getting output buffer (raw PTY output)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GetOutputParams {
     /// Session identifier returned by tui_launch
     pub session_id: String,
@@ -250,7 +251,7 @@ fn default_buffer_chars() -> usize {
 }
 
 /// Result of getting a debug buffer
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BufferResult {
     /// Buffer content
     pub content: String,
@@ -259,7 +260,7 @@ pub struct BufferResult {
 }
 
 /// Result of getting scrollback info
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollbackResult {
     /// Number of lines that have scrolled off screen
     pub lines: usize,
