@@ -795,7 +795,9 @@ impl TuiServer {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
             Some(session) => match crate::boa::execute_script(session.driver(), &params.code) {
-                Ok(result_str) => {
+                Ok((result_str, _logs)) => {
+                    // Note: Console logs are captured but not yet included in the response.
+                    // Task 8 will add them to the RunCodeResult.
                     let result = RunCodeResult { result: result_str };
                     Ok(CallToolResult::success(vec![Content::text(
                         serde_json::to_string(&result).unwrap(),

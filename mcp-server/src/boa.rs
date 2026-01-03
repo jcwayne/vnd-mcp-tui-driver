@@ -2,6 +2,9 @@
 //!
 //! This module provides a JavaScript execution environment with a `tui` global object
 //! that exposes TUI automation methods like `tui.text()`, `tui.sendText()`, etc.
+//!
+//! It also provides a `console` object with `log`, `warn`, `error`, `info`, `debug` methods
+//! that capture messages for later retrieval.
 
 use boa_engine::{
     js_string, native_function::NativeFunction,
@@ -10,9 +13,13 @@ use boa_engine::{
     Context, JsArgs, JsResult, JsString, JsValue, Source,
 };
 use base64::Engine;
+use std::cell::RefCell;
 use std::fs;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
+
+use crate::server::ConsoleEntry;
 
 /// Execute a JavaScript script with access to TUI automation functions.
 ///
@@ -49,6 +56,13 @@ use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
 /// - `tui.getInput(chars?)` - Returns raw input buffer (escape sequences sent to process)
 /// - `tui.getOutput(chars?)` - Returns raw output buffer (PTY output)
 ///
+/// Console:
+/// - `console.log(...)` - Log message at "log" level
+/// - `console.info(...)` - Log message at "info" level
+/// - `console.warn(...)` - Log message at "warn" level
+/// - `console.error(...)` - Log message at "error" level
+/// - `console.debug(...)` - Log message at "debug" level
+///
 /// # Arguments
 ///
 /// * `driver` - Reference to the TuiDriver instance
@@ -56,9 +70,13 @@ use tui_driver::{snapshot::Snapshot, Key, Row, Signal, Span, TuiDriver};
 ///
 /// # Returns
 ///
-/// Returns the string representation of the last evaluated expression,
-/// or an error message if execution fails.
-pub fn execute_script(driver: &TuiDriver, code: &str) -> Result<String, String> {
+/// Returns a tuple of (result_string, console_logs) where result_string is the
+/// string representation of the last evaluated expression, and console_logs
+/// contains all messages logged via console methods.
+pub fn execute_script(
+    driver: &TuiDriver,
+    code: &str,
+) -> Result<(String, Vec<ConsoleEntry>), String> {
     // Create a new JavaScript context
     let mut context = Context::default();
 
@@ -70,6 +88,10 @@ pub fn execute_script(driver: &TuiDriver, code: &str) -> Result<String, String> 
     // SAFETY: The driver reference is valid for the duration of execute_script,
     // and all JavaScript execution happens synchronously within this function.
     let driver_ptr = driver as *const TuiDriver;
+
+    // Create a shared vector for capturing console logs
+    // Using Rc<RefCell<>> because Boa's Context is single-threaded
+    let logs: Rc<RefCell<Vec<ConsoleEntry>>> = Rc::new(RefCell::new(Vec::new()));
 
     // Create the tui object
     let tui_object = create_tui_object(&mut context, driver_ptr)
@@ -84,6 +106,19 @@ pub fn execute_script(driver: &TuiDriver, code: &str) -> Result<String, String> 
         )
         .map_err(|e| format!("Failed to register tui global: {}", e))?;
 
+    // Create the console object
+    let console_object = create_console_object(&mut context, logs.clone())
+        .map_err(|e| format!("Failed to create console object: {}", e))?;
+
+    // Register the console object as a global property
+    context
+        .register_global_property(
+            js_string!("console"),
+            console_object,
+            Attribute::READONLY | Attribute::NON_ENUMERABLE | Attribute::PERMANENT,
+        )
+        .map_err(|e| format!("Failed to register console global: {}", e))?;
+
     // Execute the JavaScript code
     let result = context
         .eval(Source::from_bytes(code))
@@ -94,7 +129,12 @@ pub fn execute_script(driver: &TuiDriver, code: &str) -> Result<String, String> 
         .to_string(&mut context)
         .map_err(|e| format!("Failed to convert result: {}", e))?;
 
-    Ok(result_str.to_std_string_escaped())
+    // Extract the captured logs
+    let captured_logs = Rc::try_unwrap(logs)
+        .map(|cell| cell.into_inner())
+        .unwrap_or_else(|rc| rc.borrow().clone());
+
+    Ok((result_str.to_std_string_escaped(), captured_logs))
 }
 
 /// Create the `tui` JavaScript object with all automation methods.
@@ -167,6 +207,90 @@ fn create_tui_object(context: &mut Context, driver_ptr: *const TuiDriver) -> JsR
     tui_obj.set(js_string!("getOutput"), get_output_fn, false, context)?;
 
     Ok(tui_obj.into())
+}
+
+/// Create the `console` JavaScript object with log capture methods.
+///
+/// The console object provides `log`, `warn`, `error`, `info`, and `debug` methods
+/// that capture messages to a shared Vec for later retrieval.
+///
+/// Each method accepts any number of arguments, converts them to strings,
+/// joins them with spaces, and stores them with the appropriate log level.
+fn create_console_object(
+    context: &mut Context,
+    logs: Rc<RefCell<Vec<ConsoleEntry>>>,
+) -> JsResult<JsValue> {
+    let console_obj = JsObject::with_null_proto();
+
+    // Create method for each log level
+    let log_fn = create_console_method(context, logs.clone(), "log");
+    console_obj.set(js_string!("log"), log_fn, false, context)?;
+
+    let info_fn = create_console_method(context, logs.clone(), "info");
+    console_obj.set(js_string!("info"), info_fn, false, context)?;
+
+    let warn_fn = create_console_method(context, logs.clone(), "warn");
+    console_obj.set(js_string!("warn"), warn_fn, false, context)?;
+
+    let error_fn = create_console_method(context, logs.clone(), "error");
+    console_obj.set(js_string!("error"), error_fn, false, context)?;
+
+    let debug_fn = create_console_method(context, logs, "debug");
+    console_obj.set(js_string!("debug"), debug_fn, false, context)?;
+
+    Ok(console_obj.into())
+}
+
+/// Create a console method (log, warn, error, info, debug) that captures messages.
+///
+/// The method accepts any number of arguments, converts each to a string,
+/// joins them with spaces, and stores the result in the shared logs vector.
+///
+/// # Safety
+///
+/// This uses a raw pointer to the RefCell, which is safe because:
+/// 1. The Rc<RefCell<Vec<ConsoleEntry>>> is valid for the entire duration of script execution
+/// 2. All JavaScript execution happens synchronously within execute_script
+/// 3. The Boa context is single-threaded
+fn create_console_method(
+    context: &mut Context,
+    logs: Rc<RefCell<Vec<ConsoleEntry>>>,
+    level: &'static str,
+) -> JsValue {
+    // Get a raw pointer to the inner RefCell. This is safe because:
+    // 1. The Rc is passed by value and we hold a reference to it
+    // 2. The logs Rc in execute_script outlives all JS execution
+    // 3. We use Rc::as_ptr which doesn't affect reference counting
+    let logs_ptr = Rc::as_ptr(&logs) as usize;
+
+    FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            // SAFETY: logs_ptr points to a RefCell that is valid for the duration
+            // of script execution, and all JS execution is synchronous
+            let logs_ref = unsafe { &*(logs_ptr as *const RefCell<Vec<ConsoleEntry>>) };
+
+            // Convert all arguments to strings and join with space
+            let mut parts = Vec::with_capacity(args.len());
+            for arg in args.iter() {
+                let s = arg.to_string(ctx)?.to_std_string_escaped();
+                parts.push(s);
+            }
+            let message = parts.join(" ");
+
+            // Store the log entry
+            logs_ref.borrow_mut().push(ConsoleEntry {
+                level: level.to_string(),
+                message,
+            });
+
+            Ok(JsValue::undefined())
+        }),
+    )
+    .name(js_string!(level))
+    .length(0) // Variable arguments
+    .build()
+    .into()
 }
 
 /// Create the tui.text() method that returns screen text.
