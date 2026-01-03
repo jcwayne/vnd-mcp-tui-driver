@@ -56,6 +56,7 @@ pub struct ConsoleEntry {
 ///
 /// Note: `boa_engine::Context` is `!Send + !Sync`, but this is safe because
 /// access to SessionState is serialized through a Mutex.
+#[allow(dead_code)] // Will be integrated in Task 2
 pub struct SessionState {
     /// The underlying TUI driver instance
     driver: TuiDriver,
@@ -87,6 +88,36 @@ impl SessionState {
     /// Get a mutable reference to the TuiDriver.
     pub fn driver_mut(&mut self) -> &mut TuiDriver {
         &mut self.driver
+    }
+
+    /// Get a reference to the JavaScript context if initialized
+    pub fn js_context(&self) -> Option<&JsContext> {
+        self.js_context.as_ref()
+    }
+
+    /// Get a mutable reference to the JavaScript context if initialized
+    pub fn js_context_mut(&mut self) -> Option<&mut JsContext> {
+        self.js_context.as_mut()
+    }
+
+    /// Set the JavaScript context
+    pub fn set_js_context(&mut self, context: JsContext) {
+        self.js_context = Some(context);
+    }
+
+    /// Get collected console logs
+    pub fn console_logs(&self) -> &[ConsoleEntry] {
+        &self.console_logs
+    }
+
+    /// Add a console log entry
+    pub fn add_console_log(&mut self, entry: ConsoleEntry) {
+        self.console_logs.push(entry);
+    }
+
+    /// Take and clear console logs (for returning with run_code result)
+    pub fn take_console_logs(&mut self) -> Vec<ConsoleEntry> {
+        std::mem::take(&mut self.console_logs)
     }
 }
 
