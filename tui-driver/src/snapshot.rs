@@ -761,6 +761,7 @@ fn generate_yaml(rows: &[Row]) -> String {
         for span in &row.spans {
             let mut attrs: Vec<String> = Vec::new();
 
+            // Basic attributes
             if span.bold == Some(true) {
                 attrs.push("bold".to_string());
             }
@@ -770,14 +771,37 @@ fn generate_yaml(rows: &[Row]) -> String {
             if span.underline == Some(true) {
                 attrs.push("underline".to_string());
             }
+
+            // Add underline_style if present
+            if let Some(ref style) = span.underline_style {
+                attrs.push(format!("underline={}", style));
+            }
+
             if span.inverse == Some(true) {
                 attrs.push("inverse".to_string());
+            }
+
+            // Extended attributes
+            if span.strikethrough == Some(true) {
+                attrs.push("strikethrough".to_string());
+            }
+            if let Some(ref blink) = span.blink {
+                attrs.push(format!("blink={}", blink));
             }
             if let Some(ref fg) = span.fg {
                 attrs.push(format!("fg={}", fg));
             }
             if let Some(ref bg) = span.bg {
                 attrs.push(format!("bg={}", bg));
+            }
+            if let Some(ref link) = span.link {
+                attrs.push(format!("link={}", link));
+            }
+            if let Some(ref img) = span.image {
+                attrs.push(format!("image={}", img));
+                if let Some(ref size) = span.image_size {
+                    attrs.push(format!("size={}", size));
+                }
             }
 
             let attrs_str = if attrs.is_empty() {
@@ -1291,5 +1315,21 @@ mod tests {
             assert!(!snapshot.is_empty());
             assert_eq!(snapshot.spans[0].strikethrough, Some(true));
         });
+    }
+
+    #[test]
+    fn test_yaml_extended_attributes() {
+        let rows = vec![Row::with_spans(
+            1,
+            vec![Span::new("s1", "link", 1, 1, 4)
+                .with_link("https://example.com".to_string())
+                .with_strikethrough(true)
+                .with_blink("slow".to_string())],
+        )];
+
+        let yaml = generate_yaml(&rows);
+        assert!(yaml.contains("strikethrough"));
+        assert!(yaml.contains("blink=slow"));
+        assert!(yaml.contains("link=https://example.com"));
     }
 }
