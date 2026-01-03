@@ -54,9 +54,12 @@ pub struct ConsoleEntry {
 /// the first `tui_run_code` call and reused for subsequent calls,
 /// allowing variables to persist across executions.
 ///
-/// Note: `boa_engine::Context` is `!Send + !Sync`, but this is safe because
-/// access to SessionState is serialized through a Mutex.
-#[allow(dead_code)] // Will be integrated in Task 2
+/// # Safety
+///
+/// `boa_engine::Context` is `!Send + !Sync`, but this is safe because:
+/// 1. Access to SessionState is serialized through a Mutex
+/// 2. The JS context is only accessed from the MCP server's async handlers
+/// 3. All access is done while holding the Mutex lock
 pub struct SessionState {
     /// The underlying TUI driver instance
     driver: TuiDriver,
@@ -66,6 +69,15 @@ pub struct SessionState {
     /// Console output collected from JavaScript execution
     console_logs: Vec<ConsoleEntry>,
 }
+
+// SAFETY: SessionState contains a `boa_engine::Context` which is `!Send + !Sync`.
+// However, all access to SessionState is serialized through a tokio::sync::Mutex,
+// ensuring that:
+// - Only one thread can access the SessionState at a time
+// - The JS context is never accessed concurrently
+// - All async operations properly await the mutex lock before accessing
+unsafe impl Send for SessionState {}
+unsafe impl Sync for SessionState {}
 
 impl SessionState {
     /// Create a new SessionState wrapping the given TuiDriver.
@@ -188,7 +200,7 @@ fn load_closed_session(session_id: &str) -> Option<ClosedSessionData> {
 #[derive(Clone)]
 pub struct TuiServer {
     /// Active TUI sessions indexed by session ID
-    sessions: Arc<Mutex<HashMap<String, TuiDriver>>>,
+    sessions: Arc<Mutex<HashMap<String, SessionState>>>,
     /// Tool router for handling tool calls
     tool_router: ToolRouter<Self>,
 }
@@ -229,7 +241,7 @@ impl TuiServer {
             Ok(driver) => {
                 let session_id = driver.session_id().to_string();
                 let mut sessions = self.sessions.lock().await;
-                sessions.insert(session_id.clone(), driver);
+                sessions.insert(session_id.clone(), SessionState::new(driver));
 
                 let result = LaunchResult { session_id };
                 Ok(CallToolResult::success(vec![Content::text(
@@ -251,14 +263,14 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let mut sessions = self.sessions.lock().await;
         match sessions.remove(&params.session_id) {
-            Some(driver) => {
+            Some(session) => {
                 // Save debug buffers to disk before closing
-                if let Err(e) = save_closed_session(&driver) {
+                if let Err(e) = save_closed_session(session.driver()) {
                     error!("Error saving closed session data: {}", e);
                 }
 
                 // Close the driver
-                if let Err(e) = driver.close().await {
+                if let Err(e) = session.driver().close().await {
                     error!("Error closing session: {}", e);
                 }
 
@@ -296,8 +308,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let info = driver.info();
+            Some(session) => {
+                let info = session.driver().info();
                 let result = SessionInfoResult {
                     session_id: info.session_id,
                     command: info.command,
@@ -328,8 +340,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let text = driver.text();
+            Some(session) => {
+                let text = session.driver().text();
                 let result = TextResult { text };
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string(&result).unwrap(),
@@ -350,8 +362,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let snapshot = driver.snapshot();
+            Some(session) => {
+                let snapshot = session.driver().snapshot();
                 let yaml = snapshot.yaml.clone().unwrap_or_default();
                 let span_count = snapshot.span_count();
 
@@ -375,8 +387,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let screenshot = driver.screenshot();
+            Some(session) => {
+                let screenshot = session.driver().screenshot();
 
                 let result = ScreenshotResult {
                     data: screenshot.data,
@@ -420,7 +432,7 @@ impl TuiServer {
 
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.press_key(&key) {
+            Some(session) => match session.driver().press_key(&key) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -461,7 +473,7 @@ impl TuiServer {
 
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.press_keys(&keys) {
+            Some(session) => match session.driver().press_keys(&keys) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -488,7 +500,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.send_text(&params.text) {
+            Some(session) => match session.driver().send_text(&params.text) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -519,7 +531,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.click(&params.ref_id) {
+            Some(session) => match session.driver().click(&params.ref_id) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -546,7 +558,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.click_at(params.x, params.y) {
+            Some(session) => match session.driver().click_at(params.x, params.y) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -573,7 +585,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.double_click(&params.ref_id) {
+            Some(session) => match session.driver().double_click(&params.ref_id) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -600,7 +612,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.right_click(&params.ref_id) {
+            Some(session) => match session.driver().right_click(&params.ref_id) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -631,18 +643,24 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.wait_for_text(&params.text, params.timeout_ms).await {
-                Ok(found) => {
-                    let result = WaitResult { found };
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string(&result).unwrap(),
-                    )]))
+            Some(session) => {
+                match session
+                    .driver()
+                    .wait_for_text(&params.text, params.timeout_ms)
+                    .await
+                {
+                    Ok(found) => {
+                        let result = WaitResult { found };
+                        Ok(CallToolResult::success(vec![Content::text(
+                            serde_json::to_string(&result).unwrap(),
+                        )]))
+                    }
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error waiting for text: {}",
+                        e
+                    ))])),
                 }
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Error waiting for text: {}",
-                    e
-                ))])),
-            },
+            }
             None => Ok(CallToolResult::error(vec![Content::text(format!(
                 "Session not found: {}",
                 params.session_id
@@ -658,8 +676,9 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                match driver
+            Some(session) => {
+                match session
+                    .driver()
                     .wait_for_idle(params.idle_ms, params.timeout_ms)
                     .await
                 {
@@ -697,7 +716,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.resize(params.cols, params.rows) {
+            Some(session) => match session.driver().resize(params.cols, params.rows) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -741,7 +760,7 @@ impl TuiServer {
 
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match driver.send_signal(signal) {
+            Some(session) => match session.driver().send_signal(signal) {
                 Ok(()) => {
                     let result = SuccessResult { success: true };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -774,7 +793,7 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => match crate::boa::execute_script(driver, &params.code) {
+            Some(session) => match crate::boa::execute_script(session.driver(), &params.code) {
                 Ok(result_str) => {
                     let result = RunCodeResult { result: result_str };
                     Ok(CallToolResult::success(vec![Content::text(
@@ -807,8 +826,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let content = driver.get_input_buffer(params.chars);
+            Some(session) => {
+                let content = session.driver().get_input_buffer(params.chars);
                 let result = BufferResult {
                     length: content.len(),
                     content,
@@ -860,8 +879,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let content = driver.get_output_buffer(params.chars);
+            Some(session) => {
+                let content = session.driver().get_output_buffer(params.chars);
                 let result = BufferResult {
                     length: content.len(),
                     content,
@@ -911,8 +930,8 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(driver) => {
-                let lines = driver.get_scrollback();
+            Some(session) => {
+                let lines = session.driver().get_scrollback();
                 let result = ScrollbackResult { lines };
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string(&result).unwrap(),
