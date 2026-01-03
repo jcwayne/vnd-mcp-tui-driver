@@ -10,7 +10,7 @@ use vt100::Screen;
 
 // Wezterm-term imports for new snapshot implementation
 use wezterm_term::color::ColorAttribute;
-use wezterm_term::{CellAttributes, Intensity, Screen as WeztermScreen, Underline};
+use wezterm_term::{Blink, CellAttributes, Intensity, Screen as WeztermScreen, Underline};
 
 /// A span represents a contiguous piece of text with uniform styling.
 ///
@@ -697,6 +697,33 @@ pub fn build_snapshot_from_wezterm(screen: &WeztermScreen) -> Snapshot {
                 span.bg = Some(bg);
             }
 
+            // Extended attributes
+            if first_attrs.strikethrough() {
+                span.strikethrough = Some(true);
+            }
+
+            // Blink style
+            match first_attrs.blink() {
+                Blink::Slow => span.blink = Some("slow".to_string()),
+                Blink::Rapid => span.blink = Some("rapid".to_string()),
+                Blink::None => {}
+            }
+
+            // Extended underline styles
+            match first_attrs.underline() {
+                Underline::Single => span.underline_style = Some("single".to_string()),
+                Underline::Double => span.underline_style = Some("double".to_string()),
+                Underline::Curly => span.underline_style = Some("curly".to_string()),
+                Underline::Dotted => span.underline_style = Some("dotted".to_string()),
+                Underline::Dashed => span.underline_style = Some("dashed".to_string()),
+                Underline::None => {}
+            }
+
+            // Hyperlink extraction
+            if let Some(hyperlink) = first_attrs.hyperlink() {
+                span.link = Some(hyperlink.uri().to_string());
+            }
+
             row_spans.push(span);
         }
 
@@ -1251,5 +1278,18 @@ mod tests {
         assert_eq!(span.blink, Some("slow".to_string()));
         assert_eq!(span.underline_style, Some("curly".to_string()));
         assert_eq!(span.link, Some("https://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_wezterm_strikethrough() {
+        use crate::terminal::TuiTerminal;
+        let term = TuiTerminal::new(24, 80, 0);
+        // ESC[9m = strikethrough on
+        term.advance_bytes(b"\x1b[9mStrike\x1b[0m");
+        term.with_screen(|screen| {
+            let snapshot = build_snapshot_from_wezterm(screen);
+            assert!(!snapshot.is_empty());
+            assert_eq!(snapshot.spans[0].strikethrough, Some(true));
+        });
     }
 }
