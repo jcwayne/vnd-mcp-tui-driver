@@ -3,6 +3,7 @@
 use crate::error::{Result, TuiError};
 use crate::keys::Key;
 use crate::mouse::{mouse_click, mouse_double_click, mouse_drag, mouse_move, MouseButton};
+use crate::recording::{Recorder, RecordingOptions};
 use crate::snapshot::{build_snapshot, render_screenshot, Screenshot, Snapshot};
 use crate::terminal::TuiTerminal;
 use parking_lot::Mutex;
@@ -124,6 +125,7 @@ pub struct LaunchOptions {
     pub rows: u16,
     pub env: Vec<(String, String)>,
     pub cwd: Option<String>,
+    pub recording: Option<RecordingOptions>,
 }
 
 impl Default for LaunchOptions {
@@ -135,6 +137,7 @@ impl Default for LaunchOptions {
             rows: 24,
             env: Vec::new(),
             cwd: None,
+            recording: None,
         }
     }
 }
@@ -155,6 +158,12 @@ impl LaunchOptions {
     pub fn size(mut self, cols: u16, rows: u16) -> Self {
         self.cols = cols;
         self.rows = rows;
+        self
+    }
+
+    /// Enable session recording to the specified file.
+    pub fn recording(mut self, options: RecordingOptions) -> Self {
+        self.recording = Some(options);
         self
     }
 }
@@ -198,6 +207,9 @@ pub struct TuiDriver {
 
     /// Debug buffer: raw PTY output (escape sequences included)
     output_buffer: Arc<RingBuffer>,
+
+    /// Optional session recorder for asciicast format
+    recorder: Arc<Mutex<Option<Recorder>>>,
 }
 
 impl TuiDriver {
@@ -258,12 +270,31 @@ impl TuiDriver {
         let input_buffer = Arc::new(RingBuffer::new(BUFFER_CAPACITY));
         let output_buffer = Arc::new(RingBuffer::new(BUFFER_CAPACITY));
 
+        // Initialize recorder if recording is enabled
+        let recorder = if let Some(ref rec_opts) = options.recording {
+            if rec_opts.enabled {
+                Some(Recorder::new(
+                    &rec_opts.output_path,
+                    options.cols,
+                    options.rows,
+                    &options.command,
+                    rec_opts.include_input,
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let recorder = Arc::new(Mutex::new(recorder));
+
         // Spawn background reader thread (not tokio task - PTY read is blocking)
         let reader_thread = {
             let terminal = Arc::clone(&terminal);
             let last_update = Arc::clone(&last_update);
             let running = Arc::clone(&running);
             let output_buffer = Arc::clone(&output_buffer);
+            let recorder = Arc::clone(&recorder);
 
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
@@ -280,6 +311,11 @@ impl TuiDriver {
                             // Store raw output in debug buffer
                             let text = String::from_utf8_lossy(&buf[..n]);
                             output_buffer.push_str(&text);
+
+                            // Record output if recorder is enabled
+                            if let Some(ref mut rec) = *recorder.lock() {
+                                rec.record_output(&text);
+                            }
 
                             // Feed bytes to terminal
                             terminal.advance_bytes(&buf[..n]);
@@ -310,6 +346,7 @@ impl TuiDriver {
             _reader_handle: Some(reader_thread),
             input_buffer,
             output_buffer,
+            recorder,
         })
     }
 
@@ -414,6 +451,11 @@ impl TuiDriver {
         // Record to input buffer
         self.input_buffer.push_str(text);
 
+        // Record input if recorder is enabled
+        if let Some(ref mut rec) = *self.recorder.lock() {
+            rec.record_input(text);
+        }
+
         let mut writer = self.master_writer.lock();
         writer.write_all(text.as_bytes())?;
         writer.flush()?;
@@ -431,6 +473,11 @@ impl TuiDriver {
         // Record raw escape sequence to input buffer
         let text = String::from_utf8_lossy(&bytes);
         self.input_buffer.push_str(&text);
+
+        // Record input if recorder is enabled
+        if let Some(ref mut rec) = *self.recorder.lock() {
+            rec.record_input(&text);
+        }
 
         let mut writer = self.master_writer.lock();
         writer.write_all(&bytes)?;
@@ -451,6 +498,11 @@ impl TuiDriver {
             // Record raw escape sequence to input buffer
             let text = String::from_utf8_lossy(&bytes);
             self.input_buffer.push_str(&text);
+
+            // Record input if recorder is enabled
+            if let Some(ref mut rec) = *self.recorder.lock() {
+                rec.record_input(&text);
+            }
 
             writer.write_all(&bytes)?;
         }
@@ -499,6 +551,11 @@ impl TuiDriver {
 
     /// Close the session
     pub async fn close(&self) -> Result<()> {
+        // Record exit event before closing
+        if let Some(ref mut rec) = *self.recorder.lock() {
+            rec.record_exit(0);
+        }
+
         self.running.store(false, Ordering::SeqCst);
 
         // Kill the child process
@@ -530,6 +587,11 @@ impl TuiDriver {
 
         // Update terminal dimensions
         self.terminal.resize(rows, cols);
+
+        // Record resize event
+        if let Some(ref mut rec) = *self.recorder.lock() {
+            rec.record_resize(cols, rows);
+        }
 
         Ok(())
     }
