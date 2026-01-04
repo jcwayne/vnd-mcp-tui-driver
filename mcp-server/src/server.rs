@@ -22,7 +22,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use tui_driver::{Key, LaunchOptions, Signal, TuiDriver};
+use tui_driver::{Key, LaunchOptions, RecordingOptions, Signal, TuiDriver};
 
 use crate::tools::{
     BufferResult, ClickAtParams, ClickParams, ConsoleLogEntry, GetInputParams, GetOutputParams,
@@ -318,14 +318,35 @@ impl TuiServer {
     // =========================================================================
 
     /// Launch a new TUI application session
-    #[tool(description = "Launch a new TUI application session")]
+    #[tool(description = "Launch a new TUI application session. Supports optional working directory (cwd), environment variables (env), and session recording (recording) for capturing to asciicast format.")]
     async fn tui_launch(
         &self,
         Parameters(params): Parameters<LaunchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let options = LaunchOptions::new(&params.command)
+        // Build base options
+        let mut options = LaunchOptions::new(&params.command)
             .args(params.args)
             .size(params.cols, params.rows);
+
+        // Set working directory if provided
+        if let Some(cwd) = params.cwd {
+            options.cwd = Some(cwd);
+        }
+
+        // Set environment variables if provided
+        if !params.env.is_empty() {
+            options.env = params.env.into_iter().collect();
+        }
+
+        // Set recording options if provided
+        if let Some(rec_params) = params.recording {
+            let rec_options = RecordingOptions {
+                enabled: rec_params.enabled,
+                output_path: rec_params.output_path,
+                include_input: rec_params.include_input,
+            };
+            options.recording = Some(rec_options);
+        }
 
         match TuiDriver::launch(options).await {
             Ok(driver) => {

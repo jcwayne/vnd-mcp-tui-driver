@@ -2,6 +2,24 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Recording configuration for a TUI session.
+///
+/// When enabled, the session will be recorded in asciicast v3 format,
+/// compatible with asciinema player.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RecordingParams {
+    /// Whether recording is enabled.
+    pub enabled: bool,
+    /// Path to write the recording file (.cast extension recommended).
+    #[serde(rename = "outputPath")]
+    pub output_path: String,
+    /// Whether to include input events in the recording.
+    /// Default: false (only output is recorded).
+    #[serde(default, rename = "includeInput")]
+    pub include_input: bool,
+}
 
 /// Parameters for the tui_launch tool
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -17,6 +35,18 @@ pub struct LaunchParams {
     /// Terminal height in rows
     #[serde(default = "default_rows")]
     pub rows: u16,
+    /// Working directory for the command.
+    /// If not specified, uses the current working directory.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Additional environment variables to set for the command.
+    /// These are merged with the existing environment.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Recording configuration for capturing the session.
+    /// If not specified, recording is disabled.
+    #[serde(default)]
+    pub recording: Option<RecordingParams>,
 }
 
 fn default_cols() -> u16 {
