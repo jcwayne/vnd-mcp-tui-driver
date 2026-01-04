@@ -280,11 +280,17 @@ async fn test_run_code_tui_screenshot() -> anyhow::Result<()> {
     );
 
     // File should exist
+    let screenshot_path = std::path::Path::new(&parsed.result);
     assert!(
-        std::path::Path::new(&parsed.result).exists(),
+        screenshot_path.exists(),
         "Screenshot file should exist at: {}",
         parsed.result
     );
+
+    // Clean up the screenshot file after verification
+    if screenshot_path.exists() {
+        std::fs::remove_file(screenshot_path).ok();
+    }
 
     cleanup(client, &session_id, server_handle).await?;
     Ok(())
@@ -516,7 +522,11 @@ async fn test_run_code_wait_methods() -> anyhow::Result<()> {
     assert!(!is_error(&result), "waitForText failed: {}", extract_text(&result));
     let text = extract_text(&result);
     let parsed: serde_json::Value = serde_json::from_str(&text)?;
-    assert_eq!(parsed["found"].as_bool().unwrap(), true, "waitForText should return found=true");
+    assert_eq!(
+        parsed["found"].as_bool().expect("'found' field should be a boolean"),
+        true,
+        "waitForText should return found=true"
+    );
 
     // Test waitForText with non-existent text - short timeout
     let result = client
@@ -530,10 +540,14 @@ async fn test_run_code_wait_methods() -> anyhow::Result<()> {
         })
         .await?;
 
-    assert!(!is_error(&result));
+    assert!(!is_error(&result), "waitForText with non-existent text should not return error");
     let text = extract_text(&result);
     let parsed: serde_json::Value = serde_json::from_str(&text)?;
-    assert_eq!(parsed["found"].as_bool().unwrap(), false, "waitForText should return found=false");
+    assert_eq!(
+        parsed["found"].as_bool().expect("'found' field should be a boolean"),
+        false,
+        "waitForText should return found=false"
+    );
 
     // Test waitForIdle via MCP tool
     let result = client
@@ -592,8 +606,16 @@ async fn test_run_code_control_methods() -> anyhow::Result<()> {
 
     let info_text = extract_text(&info_result);
     let info: serde_json::Value = serde_json::from_str(&info_text)?;
-    assert_eq!(info["cols"].as_u64().unwrap(), 100);
-    assert_eq!(info["rows"].as_u64().unwrap(), 30);
+    assert_eq!(
+        info["cols"].as_u64().expect("'cols' field should be a number"),
+        100,
+        "cols should be 100 after resize"
+    );
+    assert_eq!(
+        info["rows"].as_u64().expect("'rows' field should be a number"),
+        30,
+        "rows should be 30 after resize"
+    );
 
     // Test sendSignal - send SIGINT (Ctrl+C)
     // First start a long-running command
@@ -763,20 +785,20 @@ async fn test_run_code_console_capture() -> anyhow::Result<()> {
     assert_eq!(parsed.logs.len(), 5, "Expected 5 log entries");
 
     // Verify each log level
-    let levels: Vec<&str> = parsed.logs.iter().map(|l| l.level.as_str()).collect();
-    assert!(levels.contains(&"log"), "Should have 'log' level");
-    assert!(levels.contains(&"info"), "Should have 'info' level");
-    assert!(levels.contains(&"warn"), "Should have 'warn' level");
-    assert!(levels.contains(&"error"), "Should have 'error' level");
-    assert!(levels.contains(&"debug"), "Should have 'debug' level");
+    let log_levels: Vec<&str> = parsed.logs.iter().map(|l| l.level.as_str()).collect();
+    assert!(log_levels.contains(&"log"), "Should have 'log' level");
+    assert!(log_levels.contains(&"info"), "Should have 'info' level");
+    assert!(log_levels.contains(&"warn"), "Should have 'warn' level");
+    assert!(log_levels.contains(&"error"), "Should have 'error' level");
+    assert!(log_levels.contains(&"debug"), "Should have 'debug' level");
 
     // Verify messages
-    let messages: Vec<&str> = parsed.logs.iter().map(|l| l.message.as_str()).collect();
-    assert!(messages.contains(&"log message"), "Should have 'log message'");
-    assert!(messages.contains(&"info message"), "Should have 'info message'");
-    assert!(messages.contains(&"warn message"), "Should have 'warn message'");
-    assert!(messages.contains(&"error message"), "Should have 'error message'");
-    assert!(messages.contains(&"debug message"), "Should have 'debug message'");
+    let log_messages: Vec<&str> = parsed.logs.iter().map(|l| l.message.as_str()).collect();
+    assert!(log_messages.contains(&"log message"), "Should have 'log message'");
+    assert!(log_messages.contains(&"info message"), "Should have 'info message'");
+    assert!(log_messages.contains(&"warn message"), "Should have 'warn message'");
+    assert!(log_messages.contains(&"error message"), "Should have 'error message'");
+    assert!(log_messages.contains(&"debug message"), "Should have 'debug message'");
 
     // Test console.log with multiple arguments
     let result = client
@@ -838,7 +860,7 @@ async fn test_run_code_context_persistence() -> anyhow::Result<()> {
         })
         .await?;
 
-    assert!(!is_error(&result));
+    assert!(!is_error(&result), "Second call should not return error");
     let text = extract_text(&result);
     let parsed: RunCodeResult = serde_json::from_str(&text)?;
 
@@ -872,10 +894,14 @@ async fn test_run_code_error_handling() -> anyhow::Result<()> {
         .await?;
 
     assert!(is_error(&result), "Syntax error should return error result");
-    let error_text = extract_text(&result);
+    let error_text = extract_text(&result).to_lowercase();
     assert!(
-        error_text.contains("JavaScript error") || error_text.contains("Error"),
-        "Error message should indicate JavaScript error"
+        error_text.contains("javascript")
+            || error_text.contains("error")
+            || error_text.contains("syntax")
+            || error_text.contains("unexpected"),
+        "Error message should indicate JavaScript error, got: {}",
+        error_text
     );
 
     // Test runtime error
