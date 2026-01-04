@@ -12,6 +12,63 @@ MCP server for headless TUI automation. Enables LLMs to run, view, and interact 
 - Take PNG screenshots of terminal output
 - JavaScript scripting for complex automation workflows
 - Session management (resize, signals, info)
+- Session recording to asciicast format for playback with asciinema
+
+## Session Recording
+
+TUI sessions can be recorded to asciicast v3 format files (.cast) for later playback with asciinema or other compatible players.
+
+### Enabling Recording
+
+To enable recording, pass a `recording` configuration when launching a session:
+
+```json
+{
+  "name": "tui_launch",
+  "arguments": {
+    "command": "bash",
+    "recording": {
+      "enabled": true,
+      "outputPath": "/tmp/session.cast",
+      "includeInput": false
+    }
+  }
+}
+```
+
+### Recording Options
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| enabled | boolean | Yes | - | Whether recording is enabled |
+| outputPath | string | Yes | - | Path to write the recording file (.cast extension recommended) |
+| includeInput | boolean | No | false | Whether to include input events in the recording |
+
+### Playing Recordings
+
+Recordings can be played back using the asciinema CLI:
+
+```bash
+asciinema play /tmp/session.cast
+```
+
+Or uploaded to asciinema.org for web playback:
+
+```bash
+asciinema upload /tmp/session.cast
+```
+
+### Recording Format
+
+Recordings use the asciicast v3 format, which consists of:
+- A JSON header line with version, terminal dimensions, timestamp, and command
+- Event lines in the format `[interval, "type", "data"]`
+
+Event types:
+- `o` - Output data (terminal output)
+- `i` - Input data (user input, if `includeInput` is enabled)
+- `r` - Resize event (terminal dimension changes)
+- `x` - Exit event (process termination with exit code)
 
 ## Quick Start
 
@@ -69,6 +126,9 @@ Launch a new TUI application session.
 | args | array | No | [] | Command arguments |
 | cols | integer | No | 80 | Terminal width in columns |
 | rows | integer | No | 24 | Terminal height in rows |
+| cwd | string | No | current dir | Working directory for the command |
+| env | object | No | {} | Additional environment variables (merged with existing) |
+| recording | object | No | null | Recording configuration (see Session Recording) |
 
 Returns: `{"session_id": "<uuid>"}`
 

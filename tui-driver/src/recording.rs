@@ -1,7 +1,61 @@
 //! Recording module for capturing terminal sessions in asciicast v3 format.
 //!
-//! This module provides functionality to record terminal sessions to .cast files
+//! This module provides functionality to record terminal sessions to `.cast` files
 //! that can be played back with asciinema or other compatible players.
+//!
+//! # Asciicast v3 Format
+//!
+//! The asciicast v3 format is a newline-delimited JSON format for recording terminal sessions.
+//! Each file consists of:
+//!
+//! 1. **Header line**: A JSON object containing metadata about the recording:
+//!    - `version`: Always `3` for asciicast v3
+//!    - `term`: Object with `cols` and `rows` for terminal dimensions
+//!    - `timestamp`: Unix timestamp when the recording started
+//!    - `command`: The command that was executed
+//!
+//! 2. **Event lines**: JSON arrays in the format `[interval, "type", "data"]`:
+//!    - `interval`: Time since the last event in seconds (floating point)
+//!    - `type`: Event type character:
+//!      - `"o"` - Output: Data written to the terminal
+//!      - `"i"` - Input: Data typed by the user (optional)
+//!      - `"r"` - Resize: Terminal dimension change as "COLSxROWS"
+//!      - `"x"` - Exit: Process termination with exit code
+//!    - `data`: Event-specific data (string)
+//!
+//! # Example Recording File
+//!
+//! ```json
+//! {"version":3,"term":{"cols":80,"rows":24},"timestamp":1704384000,"command":"bash"}
+//! [0.5,"o","$ "]
+//! [0.1,"i","ls\n"]
+//! [0.0,"o","ls\n"]
+//! [0.2,"o","file1.txt  file2.txt\n"]
+//! [0.1,"o","$ "]
+//! [1.0,"x","0"]
+//! ```
+//!
+//! # Usage
+//!
+//! Recording is enabled through [`RecordingOptions`] when launching a TUI session:
+//!
+//! ```ignore
+//! use tui_driver::{LaunchOptions, RecordingOptions};
+//!
+//! let options = LaunchOptions::new("bash")
+//!     .recording(RecordingOptions::new("/tmp/session.cast"));
+//!
+//! // Session will be recorded automatically
+//! let driver = TuiDriver::launch(options).await?;
+//! ```
+//!
+//! # Playback
+//!
+//! Recordings can be played back using the asciinema CLI:
+//!
+//! ```bash
+//! asciinema play /tmp/session.cast
+//! ```
 
 use serde::Serialize;
 use std::fs::File;
@@ -11,18 +65,66 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::error::{Result, TuiError};
 
 /// Configuration options for session recording.
+///
+/// This struct controls whether and how a TUI session is recorded.
+/// Recording captures terminal output, resize events, and optionally input events
+/// to an asciicast v3 format file.
+///
+/// # Example
+///
+/// ```
+/// use tui_driver::RecordingOptions;
+///
+/// // Basic recording (output only)
+/// let opts = RecordingOptions::new("/tmp/session.cast");
+///
+/// // Recording with input events
+/// let opts_with_input = RecordingOptions::new("/tmp/session.cast")
+///     .with_input(true);
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct RecordingOptions {
     /// Whether recording is enabled.
+    ///
+    /// When `true`, terminal events will be written to the output file.
+    /// When `false`, no recording occurs (useful for conditional recording).
     pub enabled: bool,
+
     /// Path to write the recording file.
+    ///
+    /// The file will be created if it doesn't exist, or overwritten if it does.
+    /// It is recommended to use the `.cast` extension for compatibility with
+    /// asciinema and other players.
     pub output_path: String,
+
     /// Whether to include input events in the recording.
+    ///
+    /// When `true`, keystrokes and text input are recorded as `"i"` events.
+    /// When `false` (default), only output, resize, and exit events are recorded.
+    ///
+    /// Note: Including input may expose sensitive information such as passwords.
     pub include_input: bool,
 }
 
 impl RecordingOptions {
-    /// Create new recording options with recording enabled.
+    /// Creates new recording options with recording enabled.
+    ///
+    /// By default, input recording is disabled. Use [`with_input`](Self::with_input)
+    /// to enable it.
+    ///
+    /// # Arguments
+    ///
+    /// * `output_path` - Path where the recording file will be written.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tui_driver::RecordingOptions;
+    ///
+    /// let opts = RecordingOptions::new("/tmp/my-session.cast");
+    /// assert!(opts.enabled);
+    /// assert!(!opts.include_input);
+    /// ```
     pub fn new(output_path: impl Into<String>) -> Self {
         Self {
             enabled: true,
@@ -31,7 +133,23 @@ impl RecordingOptions {
         }
     }
 
-    /// Enable or disable input recording.
+    /// Sets whether to include input events in the recording.
+    ///
+    /// This is a builder method that returns `self` for method chaining.
+    ///
+    /// # Arguments
+    ///
+    /// * `include_input` - If `true`, input events will be recorded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tui_driver::RecordingOptions;
+    ///
+    /// let opts = RecordingOptions::new("/tmp/session.cast")
+    ///     .with_input(true);
+    /// assert!(opts.include_input);
+    /// ```
     pub fn with_input(mut self, include_input: bool) -> Self {
         self.include_input = include_input;
         self
@@ -56,29 +174,70 @@ struct TermInfo {
 
 /// Recorder for capturing terminal sessions in asciicast v3 format.
 ///
-/// The recorder captures output, input (optional), resize, and exit events
-/// and writes them to a file in the asciicast v3 format.
+/// The `Recorder` captures terminal events and writes them to a file in the
+/// asciicast v3 format. It handles the file creation, header writing, and
+/// event serialization.
+///
+/// # Event Types
+///
+/// The recorder supports four event types:
+/// - **Output** (`"o"`): Terminal output data, recorded via [`record_output`](Self::record_output)
+/// - **Input** (`"i"`): User input data, recorded via [`record_input`](Self::record_input) (optional)
+/// - **Resize** (`"r"`): Terminal dimension changes, recorded via [`record_resize`](Self::record_resize)
+/// - **Exit** (`"x"`): Process termination, recorded via [`record_exit`](Self::record_exit)
+///
+/// # Timing
+///
+/// Events are timestamped with the interval (in seconds) since the last event.
+/// The first event's interval is measured from the recorder's creation time.
+///
+/// # Thread Safety
+///
+/// `Recorder` is not thread-safe. It should only be accessed from a single thread
+/// or protected by external synchronization.
+///
+/// # Example
+///
+/// ```ignore
+/// use tui_driver::recording::Recorder;
+///
+/// let mut recorder = Recorder::new("/tmp/session.cast", 80, 24, "bash", false)?;
+/// recorder.record_output("Hello, world!\n");
+/// recorder.record_resize(120, 40);
+/// recorder.record_exit(0);
+/// ```
 pub struct Recorder {
-    /// Buffered file writer.
+    /// Buffered file writer for efficient I/O.
     file: BufWriter<File>,
-    /// Time of the last recorded event (for calculating intervals).
+    /// Timestamp of the last recorded event, used to calculate intervals.
     last_event_time: Instant,
-    /// Whether to record input events.
+    /// Whether to record input events (controlled by RecordingOptions).
     include_input: bool,
 }
 
 impl Recorder {
-    /// Create a new recorder.
+    /// Creates a new recorder and writes the asciicast header.
+    ///
+    /// This constructor creates the output file, writes the JSON header line,
+    /// and initializes the recorder for capturing events.
     ///
     /// # Arguments
-    /// * `path` - Path to the output file.
-    /// * `cols` - Terminal width in columns.
-    /// * `rows` - Terminal height in rows.
-    /// * `command` - The command being recorded.
-    /// * `include_input` - Whether to record input events.
+    ///
+    /// * `path` - Path to the output file. Will be created or overwritten.
+    /// * `cols` - Initial terminal width in columns.
+    /// * `rows` - Initial terminal height in rows.
+    /// * `command` - The command being recorded (stored in header).
+    /// * `include_input` - Whether to record input events via [`record_input`](Self::record_input).
     ///
     /// # Returns
-    /// A new Recorder instance or an error if the file cannot be created.
+    ///
+    /// A new `Recorder` instance, or an error if the file cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TuiError::IoError`] if:
+    /// - The output file cannot be created (permissions, invalid path, etc.)
+    /// - The header cannot be serialized or written
     pub fn new(
         path: &str,
         cols: u16,
@@ -124,7 +283,10 @@ impl Recorder {
         })
     }
 
-    /// Calculate the interval since the last event in seconds.
+    /// Calculates the time interval since the last event.
+    ///
+    /// Updates the internal timestamp and returns the elapsed time in seconds.
+    /// This is used internally to timestamp each event.
     fn interval(&mut self) -> f64 {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_event_time);
@@ -132,7 +294,10 @@ impl Recorder {
         elapsed.as_secs_f64()
     }
 
-    /// Write an event to the recording file.
+    /// Writes an event to the recording file in asciicast format.
+    ///
+    /// Events are written as JSON arrays: `[interval, "type", "data"]`
+    /// The data is properly escaped for JSON encoding.
     fn write_event(&mut self, interval: f64, event_type: &str, data: &str) {
         // Format: [interval,"type","data"]
         // We need to escape the data for JSON
@@ -142,21 +307,35 @@ impl Recorder {
         let _ = writeln!(self.file, "[{},\"{}\",{}]", interval, event_type, escaped_data);
     }
 
-    /// Record output data.
+    /// Records terminal output data.
+    ///
+    /// This records data that is written to the terminal (the output stream).
+    /// Output events are recorded as `"o"` type events.
     ///
     /// # Arguments
-    /// * `data` - The output data to record.
+    ///
+    /// * `data` - The output data to record. May contain ANSI escape sequences.
     pub fn record_output(&mut self, data: &str) {
         let interval = self.interval();
         self.write_event(interval, "o", data);
     }
 
-    /// Record input data.
+    /// Records user input data.
     ///
-    /// Only writes if `include_input` was set to true when creating the recorder.
+    /// This records data that is sent to the terminal (keystrokes, text input).
+    /// Input events are recorded as `"i"` type events.
+    ///
+    /// **Note**: This method only writes to the file if `include_input` was set
+    /// to `true` when creating the recorder. Otherwise, it is a no-op.
     ///
     /// # Arguments
+    ///
     /// * `data` - The input data to record.
+    ///
+    /// # Security Consideration
+    ///
+    /// Input data may contain sensitive information such as passwords.
+    /// Only enable input recording when necessary.
     pub fn record_input(&mut self, data: &str) {
         if self.include_input {
             let interval = self.interval();
@@ -164,20 +343,31 @@ impl Recorder {
         }
     }
 
-    /// Record a resize event.
+    /// Records a terminal resize event.
+    ///
+    /// This records when the terminal dimensions change. Resize events are
+    /// recorded as `"r"` type events with data in the format `"COLSxROWS"`.
     ///
     /// # Arguments
-    /// * `cols` - New terminal width.
-    /// * `rows` - New terminal height.
+    ///
+    /// * `cols` - New terminal width in columns.
+    /// * `rows` - New terminal height in rows.
     pub fn record_resize(&mut self, cols: u16, rows: u16) {
         let interval = self.interval();
         let size_str = format!("{}x{}", cols, rows);
         self.write_event(interval, "r", &size_str);
     }
 
-    /// Record an exit event.
+    /// Records a process exit event.
+    ///
+    /// This records when the terminal process terminates. Exit events are
+    /// recorded as `"x"` type events with the exit code as the data.
+    ///
+    /// This method also flushes the internal buffer to ensure all data is
+    /// written to disk before the file is closed.
     ///
     /// # Arguments
+    ///
     /// * `code` - The exit code of the process.
     pub fn record_exit(&mut self, code: i32) {
         let interval = self.interval();
