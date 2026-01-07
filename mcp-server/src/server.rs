@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 use boa_engine::Context as JsContext;
@@ -913,28 +914,42 @@ impl TuiServer {
     ) -> Result<CallToolResult, McpError> {
         let sessions = self.sessions.lock().await;
         match sessions.get(&params.session_id) {
-            Some(session) => match crate::boa::execute_script(session.driver(), &params.code) {
-                Ok((result_str, logs)) => {
-                    let log_entries: Vec<ConsoleLogEntry> = logs
-                        .into_iter()
-                        .map(|e| ConsoleLogEntry {
-                            level: e.level,
-                            message: e.message,
-                        })
-                        .collect();
-                    let result = RunCodeResult {
-                        result: result_str,
-                        logs: log_entries,
-                    };
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string(&result).unwrap(),
-                    )]))
+            Some(session) => {
+                let timeout_duration = Duration::from_millis(params.timeout);
+
+                // Execute with timeout wrapper
+                match tokio::time::timeout(
+                    timeout_duration,
+                    crate::boa::execute_script(session.driver(), &params.code),
+                )
+                .await
+                {
+                    Ok(Ok((result_str, logs))) => {
+                        let log_entries: Vec<ConsoleLogEntry> = logs
+                            .into_iter()
+                            .map(|e| ConsoleLogEntry {
+                                level: e.level,
+                                message: e.message,
+                            })
+                            .collect();
+                        let result = RunCodeResult {
+                            result: result_str,
+                            logs: log_entries,
+                        };
+                        Ok(CallToolResult::success(vec![Content::text(
+                            serde_json::to_string(&result).unwrap(),
+                        )]))
+                    }
+                    Ok(Err(e)) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error executing JavaScript: {}",
+                        e
+                    ))])),
+                    Err(_) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Script execution timed out after {}ms",
+                        params.timeout
+                    ))])),
                 }
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Error executing JavaScript: {}",
-                    e
-                ))])),
-            },
+            }
             None => Ok(CallToolResult::error(vec![Content::text(format!(
                 "Session not found: {}",
                 params.session_id

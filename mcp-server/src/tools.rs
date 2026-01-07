@@ -199,6 +199,11 @@ pub struct ClickAtParams {
     pub y: u16,
 }
 
+/// Default timeout for script execution (60 seconds)
+fn default_script_timeout() -> u64 {
+    60000
+}
+
 /// Parameters for running JavaScript code
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct RunCodeParams {
@@ -206,6 +211,9 @@ pub struct RunCodeParams {
     pub session_id: String,
     /// JavaScript code to execute
     pub code: String,
+    /// Timeout in milliseconds for script execution (default: 60000ms = 1 minute)
+    #[serde(default = "default_script_timeout")]
+    pub timeout: u64,
 }
 
 /// A console log entry from JavaScript execution.
