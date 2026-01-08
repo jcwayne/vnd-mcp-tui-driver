@@ -122,7 +122,7 @@ async fn cleanup(
 // =============================================================================
 
 /// Test 1: Execute simple JS, verify result
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_basic() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -151,7 +151,7 @@ async fn test_run_code_basic() -> anyhow::Result<()> {
 }
 
 /// Test 2: tui.text() returns string
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_tui_text() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -197,7 +197,7 @@ async fn test_run_code_tui_text() -> anyhow::Result<()> {
 }
 
 /// Test 3: tui.snapshot() returns object with span_count
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_tui_snapshot() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -244,7 +244,7 @@ async fn test_run_code_tui_snapshot() -> anyhow::Result<()> {
 }
 
 /// Test 4: tui.screenshot() saves file, returns path
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_tui_screenshot() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -297,7 +297,7 @@ async fn test_run_code_tui_screenshot() -> anyhow::Result<()> {
 }
 
 /// Test 5: sendText, pressKey, pressKeys work
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_input_methods() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -383,7 +383,7 @@ async fn test_run_code_input_methods() -> anyhow::Result<()> {
 }
 
 /// Test 6: click, clickAt, doubleClick, rightClick, hover, drag
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_mouse_methods() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -487,7 +487,7 @@ async fn test_run_code_mouse_methods() -> anyhow::Result<()> {
 /// Note: The waitForText and waitForIdle JS methods use futures::executor::block_on
 /// internally, which can cause deadlocks in async contexts. We test via the MCP tool
 /// interface which properly handles the async boundaries.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_wait_methods() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -573,7 +573,7 @@ async fn test_run_code_wait_methods() -> anyhow::Result<()> {
 }
 
 /// Test 8: resize, sendSignal work
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_control_methods() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -652,7 +652,7 @@ async fn test_run_code_control_methods() -> anyhow::Result<()> {
 }
 
 /// Test 9: getScrollback, getInput, getOutput
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_debug_methods() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -753,7 +753,7 @@ async fn test_run_code_debug_methods() -> anyhow::Result<()> {
 }
 
 /// Test 10: console.log/warn/error/info/debug in logs
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_console_capture() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -826,7 +826,7 @@ async fn test_run_code_console_capture() -> anyhow::Result<()> {
 /// Note: The current implementation creates a new JS context for each call,
 /// so this test documents that variables do NOT persist (which is the current behavior).
 /// If variable persistence is desired in the future, this test would need to be updated.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_context_persistence() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -877,7 +877,7 @@ async fn test_run_code_context_persistence() -> anyhow::Result<()> {
 }
 
 /// Test 12: Invalid JS returns error
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_code_error_handling() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
     let session_id = launch_bash(&client).await?;
@@ -944,7 +944,7 @@ async fn test_run_code_error_handling() -> anyhow::Result<()> {
 // =============================================================================
 
 /// Test 13: Returns non-empty string
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_get_code_interface_returns_typescript() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
 
@@ -975,7 +975,7 @@ async fn test_get_code_interface_returns_typescript() -> anyhow::Result<()> {
 }
 
 /// Test 14: Contains all 18 method signatures
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_get_code_interface_contains_methods() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
 
@@ -1031,7 +1031,7 @@ async fn test_get_code_interface_contains_methods() -> anyhow::Result<()> {
 }
 
 /// Test 15: Contains Snapshot, Row, Span types
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_get_code_interface_contains_types() -> anyhow::Result<()> {
     let (client, server_handle) = setup_client_server().await?;
 

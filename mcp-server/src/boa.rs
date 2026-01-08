@@ -7,7 +7,9 @@
 //! that capture messages for later retrieval.
 
 use boa_engine::{
-    js_string, native_function::NativeFunction,
+    builtins::promise::PromiseState,
+    js_string,
+    native_function::NativeFunction,
     object::{builtins::JsArray, FunctionObjectBuilder, JsObject},
     property::Attribute,
     Context, JsArgs, JsResult, JsString, JsValue, Source,
@@ -73,21 +75,32 @@ use crate::server::ConsoleEntry;
 /// Returns a tuple of (result_string, console_logs) where result_string is the
 /// string representation of the last evaluated expression, and console_logs
 /// contains all messages logged via console methods.
-pub fn execute_script(
+pub async fn execute_script(
     driver: &TuiDriver,
+    code: &str,
+) -> Result<(String, Vec<ConsoleEntry>), String> {
+    // We need to run Boa in a blocking context because:
+    // 1. Boa's Context is not Send (uses Rc internally)
+    // 2. The wait methods use Handle::current().block_on() for async driver calls
+    // 3. block_in_place tells tokio we're blocking, preventing deadlocks
+    //
+    // NOTE: block_in_place requires multi-threaded tokio runtime.
+    // Tests must use #[tokio::test(flavor = "multi_thread")].
+    let driver_ptr = driver as *const TuiDriver;
+    let code = code.to_string();
+
+    tokio::task::block_in_place(move || {
+        execute_script_blocking(driver_ptr, &code)
+    })
+}
+
+/// Internal synchronous script execution.
+fn execute_script_blocking(
+    driver_ptr: *const TuiDriver,
     code: &str,
 ) -> Result<(String, Vec<ConsoleEntry>), String> {
     // Create a new JavaScript context
     let mut context = Context::default();
-
-    // We need to wrap the driver in an Arc for sharing across closures.
-    // Since TuiDriver uses interior mutability, this is safe.
-    // We create a "fake" Arc by using a raw pointer - this is safe because
-    // the driver reference outlives the script execution.
-    //
-    // SAFETY: The driver reference is valid for the duration of execute_script,
-    // and all JavaScript execution happens synchronously within this function.
-    let driver_ptr = driver as *const TuiDriver;
 
     // Create a shared vector for capturing console logs
     // Using Rc<RefCell<>> because Boa's Context is single-threaded
@@ -124,8 +137,45 @@ pub fn execute_script(
         .eval(Source::from_bytes(code))
         .map_err(|e| format!("JavaScript error: {}", e))?;
 
+    // Run the job queue to process any pending Promise jobs
+    context
+        .run_jobs()
+        .map_err(|e| format!("Job queue error: {}", e))?;
+
+    // If the result is a Promise, wait for it to settle
+    let final_result = if let Some(promise) = result.as_promise() {
+        // Poll until the Promise is settled
+        const MAX_ITERATIONS: u32 = 100000; // Safety limit (100k iterations)
+        let mut iterations = 0;
+
+        loop {
+            match promise.state() {
+                PromiseState::Fulfilled(value) => break value,
+                PromiseState::Rejected(err) => {
+                    return Err(format!("Promise rejected: {:?}", err));
+                }
+                PromiseState::Pending => {
+                    iterations += 1;
+                    if iterations > MAX_ITERATIONS {
+                        return Err("Promise did not settle within iteration limit".to_string());
+                    }
+
+                    // Small sleep to avoid busy-waiting
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+
+                    // Run more jobs (may have new jobs from async callbacks)
+                    context
+                        .run_jobs()
+                        .map_err(|e| format!("Job queue error: {}", e))?;
+                }
+            }
+        }
+    } else {
+        result
+    };
+
     // Convert result to string
-    let result_str = result
+    let result_str = final_result
         .to_string(&mut context)
         .map_err(|e| format!("Failed to convert result: {}", e))?;
 
@@ -893,7 +943,7 @@ fn create_drag_method(context: &mut Context, driver_ptr: *const TuiDriver) -> Js
 }
 
 /// Create the tui.waitForText(text, timeoutMs?) method.
-/// Blocks until text appears or timeout. Returns boolean.
+/// Blocks until text appears on screen or timeout. Returns boolean.
 fn create_wait_for_text_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
     let ptr = driver_ptr as usize;
 
@@ -910,11 +960,12 @@ fn create_wait_for_text_method(context: &mut Context, driver_ptr: *const TuiDriv
                 args.get_or_undefined(1).to_u32(ctx)? as u64
             };
 
-            // SAFETY: ptr was created from a valid reference that outlives this closure
+            // SAFETY: ptr was created from a valid reference that outlives script execution.
+            // This runs inside block_in_place, so we use Handle::current().block_on()
+            // to properly await the async driver method.
             let driver = unsafe { &*(ptr as *const TuiDriver) };
-
-            // Block on the async wait_for_text method
-            let result = futures::executor::block_on(driver.wait_for_text(&text, timeout_ms));
+            let result = tokio::runtime::Handle::current()
+                .block_on(driver.wait_for_text(&text, timeout_ms));
 
             match result {
                 Ok(found) => Ok(JsValue::from(found)),
@@ -931,7 +982,7 @@ fn create_wait_for_text_method(context: &mut Context, driver_ptr: *const TuiDriv
 }
 
 /// Create the tui.waitForIdle(timeoutMs?, idleMs?) method.
-/// Blocks until screen stops changing. Returns boolean.
+/// Blocks until screen stops changing or timeout. Returns boolean.
 fn create_wait_for_idle_method(context: &mut Context, driver_ptr: *const TuiDriver) -> JsValue {
     let ptr = driver_ptr as usize;
 
@@ -949,11 +1000,12 @@ fn create_wait_for_idle_method(context: &mut Context, driver_ptr: *const TuiDriv
                 args.get_or_undefined(1).to_u32(ctx)? as u64
             };
 
-            // SAFETY: ptr was created from a valid reference that outlives this closure
+            // SAFETY: ptr was created from a valid reference that outlives script execution.
+            // This runs inside block_in_place, so we use Handle::current().block_on()
+            // to properly await the async driver method.
             let driver = unsafe { &*(ptr as *const TuiDriver) };
-
-            // Block on the async wait_for_idle method
-            let result = futures::executor::block_on(driver.wait_for_idle(idle_ms, timeout_ms));
+            let result = tokio::runtime::Handle::current()
+                .block_on(driver.wait_for_idle(idle_ms, timeout_ms));
 
             match result {
                 Ok(()) => Ok(JsValue::from(true)),
