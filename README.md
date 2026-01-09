@@ -1,5 +1,7 @@
 # mcp-tui-driver
 
+Playwright MCP, but for TUI apps.
+
 MCP server for headless TUI automation. Enables LLMs to run, view, and interact with terminal applications through the Model Context Protocol (MCP).
 
 ## Features
@@ -100,7 +102,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | ./target/rel
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tui_close","arguments":{"session_id":"<id>"}}}
 ```
 
-## Available Tools (20 total)
+## Available Tools (23 total)
 
 ### Session Management
 
@@ -540,6 +542,82 @@ Returns:
 }
 ```
 
+### Debug
+
+#### tui_get_input
+
+Get raw input sent to the process (escape sequences included). Useful for debugging what was sent to the terminal.
+
+```json
+{
+  "name": "tui_get_input",
+  "arguments": {
+    "session_id": "<session_id>",
+    "chars": 10000
+  }
+}
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | string | Yes | - | Session identifier |
+| chars | integer | No | 10000 | Maximum characters to return |
+
+Returns:
+```json
+{
+  "length": 1234,
+  "content": "<raw escape sequences>"
+}
+```
+
+#### tui_get_output
+
+Get raw PTY output (escape sequences included). Useful for debugging terminal output.
+
+```json
+{
+  "name": "tui_get_output",
+  "arguments": {
+    "session_id": "<session_id>",
+    "chars": 10000
+  }
+}
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | string | Yes | - | Session identifier |
+| chars | integer | No | 10000 | Maximum characters to return |
+
+Returns:
+```json
+{
+  "length": 5678,
+  "content": "<raw PTY output>"
+}
+```
+
+#### tui_get_scrollback
+
+Get the number of lines that have scrolled off the visible screen.
+
+```json
+{
+  "name": "tui_get_scrollback",
+  "arguments": {
+    "session_id": "<session_id>"
+  }
+}
+```
+
+Returns:
+```json
+{
+  "lines": 42
+}
+```
+
 ## Architecture
 
 ```
@@ -554,17 +632,19 @@ mcp-tui-driver/
       lib.rs        # Public API exports
   mcp-server/       # MCP server binary exposing tools via JSON-RPC over stdio
     src/
-      main.rs       # MCP protocol handling and tool dispatch
+      main.rs       # CLI entrypoint and transport setup
+      server.rs     # MCP protocol handling and tool implementations
       tools.rs      # Tool parameter and result types
       boa.rs        # JavaScript runtime integration (Boa engine)
 ```
 
 ### Key Dependencies
 
-- **alacritty_terminal** - Terminal emulation
-- **rustix** - PTY (pseudo-terminal) management
+- **wezterm-term** - Terminal emulation from WezTerm
+- **portable-pty** - Cross-platform PTY (pseudo-terminal) management
 - **boa_engine** - JavaScript execution for scripting
-- **image/ab_glyph** - Screenshot rendering with font support
+- **rmcp** - MCP protocol implementation
+- **image** - Screenshot rendering
 
 ## Development
 

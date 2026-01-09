@@ -1114,7 +1114,7 @@ impl ServerHandler for TuiServer {
             },
             server_info: Implementation {
                 name: "mcp-tui-driver".to_string(),
-                title: Some("TUI Driver MCP Server".to_string()),
+                title: Some("Playwright MCP for TUI apps".to_string()),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 icons: None,
                 website_url: None,

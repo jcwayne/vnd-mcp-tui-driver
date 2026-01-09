@@ -10,10 +10,10 @@ use clap::Parser;
 use rmcp::ServiceExt;
 use tracing::debug;
 
-/// MCP server for TUI automation
+/// Playwright MCP for TUI apps
 #[derive(Parser)]
 #[command(name = "mcp-tui-driver")]
-#[command(about = "MCP server for TUI automation")]
+#[command(about = "Playwright MCP for TUI apps")]
 #[command(version)]
 struct Cli {
     /// Run in SSE mode instead of stdio

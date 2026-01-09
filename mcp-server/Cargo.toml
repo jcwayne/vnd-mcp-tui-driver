@@ -2,6 +2,11 @@
 name = "mcp-tui-driver"
 version = "0.1.0"
 edition = "2021"
+description = "Playwright MCP for TUI apps - MCP server for headless TUI automation"
+license = "MIT"
+repository = "https://github.com/anthropics/mcp-tui-driver"
+keywords = ["mcp", "tui", "terminal", "automation", "llm"]
+categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 name = "mcp_tui_driver"

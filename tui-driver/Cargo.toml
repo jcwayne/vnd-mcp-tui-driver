@@ -2,6 +2,11 @@
 name = "tui-driver"
 version = "0.1.0"
 edition = "2021"
+description = "Core library for TUI automation - PTY management and terminal emulation"
+license = "MIT"
+repository = "https://github.com/anthropics/mcp-tui-driver"
+keywords = ["tui", "terminal", "pty", "automation"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 portable-pty = "0.8"
