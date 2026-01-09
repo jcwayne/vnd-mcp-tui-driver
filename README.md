@@ -4,6 +4,137 @@ Playwright MCP, but for TUI apps.
 
 MCP server for headless TUI automation. Enables LLMs to run, view, and interact with terminal applications through the Model Context Protocol (MCP).
 
+## Quick installation
+
+```sh
+cargo install --git https://github.com/michaellee8/mcp-tui-server
+```
+
+## MCP Configuration
+
+<details>
+<summary><b>Claude Code (CLI)</b></summary>
+
+Edit `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "tui-driver": {
+      "command": "mcp-tui-driver",
+      "args": []
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Claude Desktop</b></summary>
+
+Edit the config file:
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "tui-driver": {
+      "command": "/path/to/.cargo/bin/mcp-tui-driver",
+      "args": []
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Cursor</b></summary>
+
+Edit `~/.cursor/mcp.json` (or `.cursor/mcp.json` in your project root):
+
+```json
+{
+  "mcpServers": {
+    "tui-driver": {
+      "command": "mcp-tui-driver",
+      "args": []
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>VS Code (Continue Extension)</b></summary>
+
+Edit `~/.continue/config.json`:
+
+```json
+{
+  "experimental": {
+    "modelContextProtocolServers": [
+      {
+        "transport": {
+          "type": "stdio",
+          "command": "mcp-tui-driver",
+          "args": []
+        }
+      }
+    ]
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Windsurf (Codeium)</b></summary>
+
+Edit `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "tui-driver": {
+      "command": "mcp-tui-driver",
+      "args": []
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>OpenAI Codex CLI</b></summary>
+
+Edit `~/.codex/config.json`:
+
+```json
+{
+  "mcp_servers": {
+    "tui-driver": {
+      "command": "mcp-tui-driver"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Troubleshooting</b></summary>
+
+- **Binary not found**: Use the full path (e.g., `/Users/<username>/.cargo/bin/mcp-tui-driver`)
+- **Permission denied**: Run `chmod +x $(which mcp-tui-driver)`
+- **Debug logging**: Add `"env": {"RUST_LOG": "debug"}` to the server config
+
+</details>
+
 ## Features
 
 - Launch and manage multiple TUI sessions concurrently
@@ -672,21 +803,6 @@ Integration tests require a functional PTY environment:
 
 ```bash
 cargo test --package tui-driver -- --test-threads=1
-```
-
-## MCP Configuration
-
-Add to your MCP client configuration:
-
-```json
-{
-  "mcpServers": {
-    "tui-driver": {
-      "command": "/path/to/mcp-tui-driver",
-      "args": []
-    }
-  }
-}
 ```
 
 ## Protocol
