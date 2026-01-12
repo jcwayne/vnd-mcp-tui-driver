@@ -7,7 +7,7 @@ MCP server for headless TUI automation. Enables LLMs to run, view, and interact 
 ## Quick installation
 
 ```sh
-cargo install --git https://github.com/michaellee8/mcp-tui-server
+cargo install --git https://github.com/michaellee8/mcp-tui-driver
 ```
 
 ## MCP Configuration
