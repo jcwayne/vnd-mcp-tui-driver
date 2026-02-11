@@ -827,6 +827,24 @@ The server communicates over stdin/stdout using JSON-RPC 2.0 with the MCP protoc
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"<tool_name>","arguments":{...}}}
 ```
 
+## Security
+
+This project has undergone a comprehensive security audit. Key findings:
+
+✅ **No network access** - The application does not make HTTP requests or send data to external servers  
+✅ **Sandboxed JavaScript** - The Boa engine provides isolated JavaScript execution without filesystem or network APIs  
+✅ **Controlled command execution** - Commands are user-provided for intended TUI automation purposes  
+✅ **Path traversal protection** - File operations include validation to prevent directory traversal attacks
+
+**Important Security Considerations:**
+
+- This tool launches and controls terminal applications with your user privileges
+- Always validate commands before launching them via `tui_launch`
+- Review JavaScript code before executing it via `tui_run_code`
+- For untrusted environments, run in a container or VM with restricted permissions
+
+For detailed security analysis and recommendations, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 MIT
