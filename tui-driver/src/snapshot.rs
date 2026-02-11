@@ -894,7 +894,7 @@ mod tests {
         let term = TuiTerminal::new(24, 80, 0);
         term.advance_bytes(b"Hello World");
 
-        let snapshot = term.with_screen(|screen| build_snapshot(screen));
+        let snapshot = term.with_screen(build_snapshot);
 
         // Should have content
         assert!(!snapshot.is_empty());
@@ -924,7 +924,7 @@ mod tests {
         // ESC[1m = bold on, ESC[0m = reset
         term.advance_bytes(b"\x1b[1mBold\x1b[0m Normal");
 
-        let snapshot = term.with_screen(|screen| build_snapshot(screen));
+        let snapshot = term.with_screen(build_snapshot);
 
         // Should have two spans (bold and normal)
         assert_eq!(snapshot.span_count(), 2);
@@ -947,7 +947,7 @@ mod tests {
         let term = TuiTerminal::new(24, 80, 0);
         term.advance_bytes(b"Line 1\r\nLine 2\r\nLine 3");
 
-        let snapshot = term.with_screen(|screen| build_snapshot(screen));
+        let snapshot = term.with_screen(build_snapshot);
 
         assert_eq!(snapshot.row_count(), 3);
         assert_eq!(snapshot.span_count(), 3);
@@ -971,7 +971,7 @@ mod tests {
         // ESC[31m = red foreground
         term.advance_bytes(b"\x1b[31mRed Text\x1b[0m");
 
-        let snapshot = term.with_screen(|screen| build_snapshot(screen));
+        let snapshot = term.with_screen(build_snapshot);
 
         assert_eq!(snapshot.span_count(), 1);
         let span = &snapshot.spans[0];
@@ -987,7 +987,7 @@ mod tests {
         let term = TuiTerminal::new(24, 80, 0);
         // Don't advance any bytes - empty screen
 
-        let snapshot = term.with_screen(|screen| build_snapshot(screen));
+        let snapshot = term.with_screen(build_snapshot);
 
         assert!(snapshot.is_empty());
         assert_eq!(snapshot.row_count(), 0);

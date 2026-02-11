@@ -522,9 +522,8 @@ async fn test_run_code_wait_methods() -> anyhow::Result<()> {
     assert!(!is_error(&result), "waitForText failed: {}", extract_text(&result));
     let text = extract_text(&result);
     let parsed: serde_json::Value = serde_json::from_str(&text)?;
-    assert_eq!(
+    assert!(
         parsed["found"].as_bool().expect("'found' field should be a boolean"),
-        true,
         "waitForText should return found=true"
     );
 
@@ -543,9 +542,8 @@ async fn test_run_code_wait_methods() -> anyhow::Result<()> {
     assert!(!is_error(&result), "waitForText with non-existent text should not return error");
     let text = extract_text(&result);
     let parsed: serde_json::Value = serde_json::from_str(&text)?;
-    assert_eq!(
-        parsed["found"].as_bool().expect("'found' field should be a boolean"),
-        false,
+    assert!(
+        !parsed["found"].as_bool().expect("'found' field should be a boolean"),
         "waitForText should return found=false"
     );
 

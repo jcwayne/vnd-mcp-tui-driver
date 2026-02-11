@@ -434,12 +434,12 @@ impl TuiDriver {
 
     /// Get accessibility-style snapshot of current screen
     pub fn snapshot(&self) -> Snapshot {
-        self.terminal.with_screen(|screen| build_snapshot(screen))
+        self.terminal.with_screen(build_snapshot)
     }
 
     /// Get a PNG screenshot of the current screen
     pub fn screenshot(&self) -> Screenshot {
-        self.terminal.with_screen(|screen| render_screenshot(screen))
+        self.terminal.with_screen(render_screenshot)
     }
 
     /// Send text to the terminal
