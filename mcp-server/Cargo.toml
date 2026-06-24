@@ -28,12 +28,12 @@ anyhow = "1"
 async-trait = "0.1"
 boa_engine = "0.21"
 boa_runtime = "0.21"
-rmcp = { version = "0.12", features = ["server", "transport-io"] }
+rmcp = { version = "1.6", features = ["server", "transport-io"] }
 schemars = "1.2"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 
 [dev-dependencies]
 anyhow = "1"
-rmcp = { version = "0.12", features = ["client"] }
+rmcp = { version = "1.6", features = ["client"] }
 tempfile = "3"
